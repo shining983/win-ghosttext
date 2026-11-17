@@ -14,7 +14,7 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <Version>0.1.0</Version>
     <Authors>shining983</Authors>
-    <Description>Local English GhostText completion for Windows</Description>
+    <Description>Local English completion bubble for Windows</Description>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
   </PropertyGroup>
   <ItemGroup>

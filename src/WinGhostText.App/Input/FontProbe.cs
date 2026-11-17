@@ -6,7 +6,8 @@ using WinGhostText.App.Native;
 namespace WinGhostText.App.Input;
 
 /// <summary>
-/// Best-effort live font probe for GhostText overlay matching.
+/// Best-effort live font probe. Bubble UI uses size only for light scaling;
+/// family/weight matching is no longer required for caret-anchored suggestions.
 /// Returns WPF device-independent pixel (DIP) sizes — not raw GDI points/pixels.
 /// </summary>
 internal static class FontProbe
@@ -15,7 +16,7 @@ internal static class FontProbe
         string? Family,
         float? SizeDip,
         int? Weight,
-        /// <summary>Rendered line/glyph cell height in device pixels when known (for overlay calibration).</summary>
+        /// <summary>Rendered line/glyph cell height in device pixels when known (caret/bubble height fallback).</summary>
         int TargetCellHeightPx);
 
     public static Result TryRead(IntPtr hwnd, IntPtr rootHwnd, string className, int caretHeightPx = 0)

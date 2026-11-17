@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
@@ -6,26 +5,31 @@ using System.Windows.Media;
 using Microsoft.Win32;
 using WinGhostText.App.Native;
 using WinGhostText.Core;
-using MediaBrushes = System.Windows.Media.Brushes;
 using MediaColor = System.Windows.Media.Color;
 using MediaFontFamily = System.Windows.Media.FontFamily;
+using DrawingPoint = System.Drawing.Point;
 
 namespace WinGhostText.App.Ui;
 
 /// <summary>
-/// Transparent, click-through, no-activate overlay showing the gray GhostText suffix.
+/// Transparent, click-through, no-activate IME-like suggestion bubble near the caret.
+/// Shows the full suggested / corrected word — not an in-line ghost suffix.
 /// </summary>
 internal sealed class GhostTextOverlay
 {
-    // Light theme: darker mid-gray so the suffix reads as ghost on pale editors.
-    private static readonly SolidColorBrush LightThemeGhostBrush = CreateFrozenBrush(0xD0, 0x5A, 0x5A, 0x5A);
-    // Dark theme (Win11 dark Notepad): brighter #B0B0B0 with higher alpha for contrast.
-    private static readonly SolidColorBrush DarkThemeGhostBrush = CreateFrozenBrush(0xE6, 0xB0, 0xB0, 0xB0);
-
-    /// <summary>Minimum |blendedFg - bgLuma| before we swap to the other theme brush.</summary>
-    private const int MinContrastDelta = 48;
+    private const double GapDip = 4.0;
+    private const double DefaultFontSizeDip = 12.0 * 96.0 / 72.0;
+    private const double MinFontSizeDip = 10.0;
+    private const double MaxFontSizeDip = 16.0;
+    private static readonly SolidColorBrush LightPanelBrush = CreateFrozenBrush(0xF2, 0xF7, 0xF7, 0xF7);
+    private static readonly SolidColorBrush DarkPanelBrush = CreateFrozenBrush(0xF2, 0x2D, 0x2D, 0x2D);
+    private static readonly SolidColorBrush LightTextBrush = CreateFrozenBrush(0xFF, 0x1A, 0x1A, 0x1A);
+    private static readonly SolidColorBrush DarkTextBrush = CreateFrozenBrush(0xFF, 0xF0, 0xF0, 0xF0);
+    private static readonly SolidColorBrush LightBorderBrush = CreateFrozenBrush(0xCC, 0xC0, 0xC0, 0xC0);
+    private static readonly SolidColorBrush DarkBorderBrush = CreateFrozenBrush(0xCC, 0x55, 0x55, 0x55);
 
     private readonly Window _window;
+    private readonly Border _panel;
     private readonly TextBlock _text;
     private bool _hooked;
 
@@ -33,15 +37,25 @@ internal sealed class GhostTextOverlay
     {
         _text = new TextBlock
         {
-            Foreground = LightThemeGhostBrush,
-            Background = MediaBrushes.Transparent,
-            // 11pt in DIPs — replaced by live probe whenever available.
-            FontSize = 11.0 * 96.0 / 72.0,
+            Foreground = LightTextBrush,
+            Background = System.Windows.Media.Brushes.Transparent,
+            FontSize = DefaultFontSizeDip,
             FontFamily = new MediaFontFamily("Segoe UI"),
+            FontWeight = FontWeights.Normal,
             TextWrapping = TextWrapping.NoWrap,
             Padding = new Thickness(0),
             Margin = new Thickness(0),
-            LineStackingStrategy = LineStackingStrategy.BlockLineHeight,
+            IsHitTestVisible = false
+        };
+
+        _panel = new Border
+        {
+            Background = LightPanelBrush,
+            BorderBrush = LightBorderBrush,
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(10, 5, 10, 5),
+            Child = _text,
             IsHitTestVisible = false
         };
 
@@ -49,7 +63,7 @@ internal sealed class GhostTextOverlay
         {
             WindowStyle = WindowStyle.None,
             AllowsTransparency = true,
-            Background = MediaBrushes.Transparent,
+            Background = System.Windows.Media.Brushes.Transparent,
             ShowInTaskbar = false,
             Topmost = true,
             ResizeMode = ResizeMode.NoResize,
@@ -57,13 +71,7 @@ internal sealed class GhostTextOverlay
             Focusable = false,
             IsHitTestVisible = false,
             SizeToContent = SizeToContent.WidthAndHeight,
-            Content = new Border
-            {
-                Background = MediaBrushes.Transparent,
-                BorderThickness = new Thickness(0),
-                Padding = new Thickness(0),
-                Child = _text
-            }
+            Content = _panel
         };
 
         _window.SourceInitialized += (_, _) => ApplyClickThrough();
@@ -88,88 +96,82 @@ internal sealed class GhostTextOverlay
         }
     }
 
+    /// <summary>
+    /// Show the primary suggestion bubble anchored near the caret.
+    /// Prefers below the caret; flips above when the work area has insufficient space.
+    /// </summary>
     public void Show(
         CompletionSuggestion suggestion,
-        System.Drawing.Point caretScreen,
-        string? fontFamily,
-        float? fontSizeDip,
-        int? fontWeight = null,
-        int targetCellHeightPx = 0,
-        uint targetDpi = 0)
+        DrawingPoint caretScreen,
+        int caretHeightPx,
+        uint targetDpi = 0,
+        float? preferredFontSizeDip = null)
     {
         void Apply()
         {
-            _text.Text = suggestion.GhostDisplay;
-            _text.Foreground = ResolveGhostBrush(caretScreen);
-            if (!string.IsNullOrWhiteSpace(fontFamily))
-            {
-                // Prefer the probed face; allow WPF fallbacks if the face is missing locally.
-                _text.FontFamily = new MediaFontFamily(
-                    fontFamily + ", Segoe UI Variable, Cascadia Mono, Consolas, Segoe UI");
-            }
-            else
-            {
-                _text.FontFamily = new MediaFontFamily(
-                    "Segoe UI Variable, Cascadia Mono, Consolas, Segoe UI");
-            }
+            // Full suggested / corrected word (single primary candidate).
+            _text.Text = suggestion.FullWord;
+            ApplyTheme(caretScreen);
+            _text.FontSize = ResolveBubbleFontSize(preferredFontSizeDip);
 
-            if (fontSizeDip is > 0)
-            {
-                // Probe already converted points / GDI pixels into WPF DIPs.
-                _text.FontSize = fontSizeDip.Value;
-            }
-
-            if (fontWeight is > 0 and <= 1000)
-            {
-                _text.FontWeight = FontWeight.FromOpenTypeWeight(fontWeight.Value);
-            }
-            else
-            {
-                _text.FontWeight = FontWeights.Normal;
-            }
-
-            // Create HWND first (no Show yet) so per-monitor DPI / FormattedText are correct.
+            // Create HWND first so per-monitor DPI is correct before measuring.
             ApplyClickThrough();
 
-            // Prefer the focused editor's GetDpiForWindow so physical px ↔ DIP matches the caret.
-            var (scaleX, scaleY, pixelsPerDip) = ResolveDpiScales(targetDpi);
-
-            // Physical caret → DIP using the editor (or overlay) monitor scale (PerMonitorV2).
+            var (scaleX, scaleY) = ResolveDpiScales(targetDpi);
             var dipX = caretScreen.X / scaleX;
-            var dipY = caretScreen.Y / scaleY;
-            var cellHeightDip = targetCellHeightPx > 0
-                ? targetCellHeightPx / scaleY
-                : 0;
+            var caretTopDip = caretScreen.Y / scaleY;
+            var caretHeightDip = caretHeightPx > 0 ? caretHeightPx / scaleY : DefaultFontSizeDip * 1.2;
+            var caretBottomDip = caretTopDip + caretHeightDip;
 
-            // Calibrate em size so the laid-out line box matches the host caret/glyph cell.
-            // Caret/line height is not FontSize; without this, GhostText stays visually small.
-            if (cellHeightDip > 0 && !string.IsNullOrEmpty(_text.Text))
+            _window.UpdateLayout();
+            if (!_window.IsMeasureValid || !_window.IsArrangeValid)
             {
-                CalibrateToCellHeight(cellHeightDip, pixelsPerDip);
+                _window.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+                _window.Arrange(new Rect(_window.DesiredSize));
             }
 
-            _text.LineHeight = _text.FontSize;
+            var bubbleWidth = Math.Max(_window.ActualWidth, _window.DesiredSize.Width);
+            var bubbleHeight = Math.Max(_window.ActualHeight, _window.DesiredSize.Height);
+            if (bubbleWidth <= 0 || bubbleHeight <= 0)
+            {
+                // Force a layout pass after text/theme change.
+                _panel.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+                bubbleWidth = _panel.DesiredSize.Width;
+                bubbleHeight = _panel.DesiredSize.Height;
+            }
 
-            var metrics = MeasureText(pixelsPerDip);
+            var work = GetWorkAreaDip(caretScreen, scaleX, scaleY);
+            var left = dipX;
+            // Prefer below caret; flip above if not enough room.
+            var topBelow = caretBottomDip + GapDip;
+            var topAbove = caretTopDip - GapDip - bubbleHeight;
             double top;
-            if (cellHeightDip > 0 && metrics.Height > 0 && metrics.Baseline > 0)
+            if (topBelow + bubbleHeight <= work.Bottom - 2)
             {
-                // Match overlay baseline to host cell baseline (proportional within the caret box).
-                var hostBaseline = dipY + cellHeightDip * (metrics.Baseline / metrics.Height);
-                top = hostBaseline - metrics.Baseline;
+                top = topBelow;
             }
-            else if (cellHeightDip > 0 && metrics.Height > 0)
+            else if (topAbove >= work.Top + 2)
             {
-                top = dipY + (cellHeightDip - metrics.Height) / 2.0;
+                top = topAbove;
             }
             else
             {
-                // No caret-cell metrics: align top to caret top (no brittle caretTop-1 fudge).
-                top = dipY;
+                // Clamp into work area when neither side fits cleanly.
+                top = Math.Clamp(topBelow, work.Top + 2, Math.Max(work.Top + 2, work.Bottom - bubbleHeight - 2));
             }
 
-            // Caret screen point is already the insertion Right edge — no extra horizontal nudge.
-            _window.Left = dipX;
+            // Keep the bubble on-screen horizontally.
+            if (left + bubbleWidth > work.Right - 2)
+            {
+                left = Math.Max(work.Left + 2, work.Right - bubbleWidth - 2);
+            }
+
+            if (left < work.Left + 2)
+            {
+                left = work.Left + 2;
+            }
+
+            _window.Left = left;
             _window.Top = top;
 
             if (!_window.IsVisible)
@@ -190,108 +192,80 @@ internal sealed class GhostTextOverlay
         }
     }
 
-    private (double ScaleX, double ScaleY, double PixelsPerDip) ResolveDpiScales(uint targetDpi)
+    private static double ResolveBubbleFontSize(float? preferredFontSizeDip)
+    {
+        if (preferredFontSizeDip is > 0)
+        {
+            // Lightly scale toward the host size, but keep the bubble readable and compact.
+            return Math.Clamp(preferredFontSizeDip.Value, MinFontSizeDip, MaxFontSizeDip);
+        }
+
+        return DefaultFontSizeDip;
+    }
+
+    private (double ScaleX, double ScaleY) ResolveDpiScales(uint targetDpi)
     {
         if (targetDpi > 0)
         {
             var scale = targetDpi / (double)NativeMethods.DEFAULT_DPI;
             if (scale > 0)
             {
-                return (scale, scale, scale);
+                return (scale, scale);
             }
         }
 
         var dpi = VisualTreeHelper.GetDpi(_window);
         var scaleX = dpi.DpiScaleX > 0 ? dpi.DpiScaleX : 1.0;
         var scaleY = dpi.DpiScaleY > 0 ? dpi.DpiScaleY : 1.0;
-        var pixelsPerDip = dpi.PixelsPerDip > 0 ? dpi.PixelsPerDip : 1.0;
-        return (scaleX, scaleY, pixelsPerDip);
+        return (scaleX, scaleY);
     }
 
-    private void CalibrateToCellHeight(double cellHeightDip, double pixelsPerDip)
+    private static Rect GetWorkAreaDip(DrawingPoint caretScreen, double scaleX, double scaleY)
     {
-        // Iterate a couple of times — typeface metrics are mildly non-linear with size.
-        for (var i = 0; i < 3; i++)
+        try
         {
-            var measured = MeasureText(pixelsPerDip);
-            if (measured.Height <= 0.1)
-            {
-                return;
-            }
-
-            var scale = cellHeightDip / measured.Height;
-            if (Math.Abs(scale - 1.0) < 0.02)
-            {
-                return;
-            }
-
-            // Keep FontSize in a sane range (6–96 DIP).
-            var next = _text.FontSize * scale;
-            _text.FontSize = Math.Clamp(next, 6.0, 96.0);
-            _text.LineHeight = _text.FontSize;
+            var screen = System.Windows.Forms.Screen.FromPoint(caretScreen);
+            var wa = screen.WorkingArea;
+            return new Rect(
+                wa.Left / scaleX,
+                wa.Top / scaleY,
+                wa.Width / scaleX,
+                wa.Height / scaleY);
+        }
+        catch
+        {
+            return new Rect(0, 0, SystemParameters.WorkArea.Width, SystemParameters.WorkArea.Height);
         }
     }
 
-    private FormattedText MeasureText(double pixelsPerDip)
+    private void ApplyTheme(DrawingPoint caretScreen)
     {
-        return new FormattedText(
-            _text.Text ?? string.Empty,
-            CultureInfo.CurrentUICulture,
-            System.Windows.FlowDirection.LeftToRight,
-            new Typeface(_text.FontFamily, _text.FontStyle, _text.FontWeight, _text.FontStretch),
-            _text.FontSize,
-            _text.Foreground,
-            pixelsPerDip);
+        var isLight = ResolveIsLightBackground(caretScreen);
+        if (isLight)
+        {
+            _panel.Background = LightPanelBrush;
+            _panel.BorderBrush = LightBorderBrush;
+            _text.Foreground = LightTextBrush;
+        }
+        else
+        {
+            _panel.Background = DarkPanelBrush;
+            _panel.BorderBrush = DarkBorderBrush;
+            _text.Foreground = DarkTextBrush;
+        }
     }
 
-    private static SolidColorBrush CreateFrozenBrush(byte a, byte r, byte g, byte b)
-    {
-        var brush = new SolidColorBrush(MediaColor.FromArgb(a, r, g, b));
-        brush.Freeze();
-        return brush;
-    }
-
-    /// <summary>
-    /// Pick a darker (light theme) or lighter (dark theme) mid-gray so the suffix stays visible
-    /// without matching typed text. Prefers sampling the editor background near the caret;
-    /// swaps brushes when contrast against the sampled background is too low.
-    /// </summary>
-    private static SolidColorBrush ResolveGhostBrush(System.Drawing.Point caretScreen)
+    private static bool ResolveIsLightBackground(DrawingPoint caretScreen)
     {
         if (TrySampleBackgroundLuma(caretScreen, out var bgLuma))
         {
-            var isLight = bgLuma >= 128;
-            var primary = isLight ? LightThemeGhostBrush : DarkThemeGhostBrush;
-            if (ContrastDelta(primary, bgLuma) >= MinContrastDelta)
-            {
-                return primary;
-            }
-
-            var fallback = isLight ? DarkThemeGhostBrush : LightThemeGhostBrush;
-            if (ContrastDelta(fallback, bgLuma) > ContrastDelta(primary, bgLuma))
-            {
-                return fallback;
-            }
-
-            return primary;
+            return bgLuma >= 128;
         }
 
-        return AppsUseLightTheme() ? LightThemeGhostBrush : DarkThemeGhostBrush;
+        return AppsUseLightTheme();
     }
 
-    /// <summary>
-    /// Approximate luminance delta between a semi-transparent ghost brush and an opaque background.
-    /// </summary>
-    internal static int ContrastDelta(SolidColorBrush brush, int bgLuma)
-    {
-        var c = brush.Color;
-        var fgLuma = (c.R * 299 + c.G * 587 + c.B * 114) / 1000;
-        var alpha = c.A / 255.0;
-        var blended = (int)Math.Round(fgLuma * alpha + bgLuma * (1.0 - alpha));
-        return Math.Abs(blended - bgLuma);
-    }
-
-    private static bool TrySampleBackgroundLuma(System.Drawing.Point caretScreen, out int luma)
+    private static bool TrySampleBackgroundLuma(DrawingPoint caretScreen, out int luma)
     {
         luma = 128;
         var hdc = NativeMethods.GetDC(IntPtr.Zero);
@@ -302,8 +276,7 @@ internal sealed class GhostTextOverlay
 
         try
         {
-            // Prefer points that are usually empty editor chrome (above / ahead of glyphs),
-            // not the caret bar or typed text — especially important on dark Notepad.
+            // Sample empty editor chrome near the caret (not the caret bar itself).
             var samples = new (int X, int Y)[]
             {
                 (caretScreen.X + 28, Math.Max(0, caretScreen.Y - 4)),
@@ -317,7 +290,7 @@ internal sealed class GhostTextOverlay
             foreach (var (x, y) in samples)
             {
                 var pixel = NativeMethods.GetPixel(hdc, x, y);
-                if (pixel == 0xFFFFFFFF) // GetPixel failure sentinel
+                if (pixel == 0xFFFFFFFF)
                 {
                     continue;
                 }
@@ -357,6 +330,13 @@ internal sealed class GhostTextOverlay
         {
             return true;
         }
+    }
+
+    private static SolidColorBrush CreateFrozenBrush(byte a, byte r, byte g, byte b)
+    {
+        var brush = new SolidColorBrush(MediaColor.FromArgb(a, r, g, b));
+        brush.Freeze();
+        return brush;
     }
 
     private void ApplyClickThrough()
