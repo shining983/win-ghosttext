@@ -110,6 +110,7 @@ internal sealed class GhostTextOverlay
         void Apply()
         {
             // Full suggested / corrected word (single primary candidate).
+            // FontProbe may be weak on Win11 Notepad — defaults keep the bubble visible.
             _text.Text = suggestion.FullWord;
             ApplyTheme(caretScreen);
             _text.FontSize = ResolveBubbleFontSize(preferredFontSizeDip);
@@ -118,29 +119,40 @@ internal sealed class GhostTextOverlay
             ApplyClickThrough();
 
             var (scaleX, scaleY) = ResolveDpiScales(targetDpi);
-            var dipX = caretScreen.X / scaleX;
-            var caretTopDip = caretScreen.Y / scaleY;
+            // Guard against empty caret: still show near work-area origin rather than skipping.
+            var caretX = caretScreen.X;
+            var caretY = caretScreen.Y;
+            if (caretX <= 2 && caretY <= 2)
+            {
+                var wa = System.Windows.Forms.Screen.PrimaryScreen?.WorkingArea
+                         ?? new System.Drawing.Rectangle(0, 0, 800, 600);
+                caretX = wa.Left + 48;
+                caretY = wa.Top + 48;
+            }
+
+            var dipX = caretX / scaleX;
+            var caretTopDip = caretY / scaleY;
             var caretHeightDip = caretHeightPx > 0 ? caretHeightPx / scaleY : DefaultFontSizeDip * 1.2;
             var caretBottomDip = caretTopDip + caretHeightDip;
 
+            _panel.Measure(new System.Windows.Size(double.PositiveInfinity, double.PositiveInfinity));
+            _panel.Arrange(new System.Windows.Rect(_panel.DesiredSize));
             _window.UpdateLayout();
             if (!_window.IsMeasureValid || !_window.IsArrangeValid)
             {
-                _window.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
-                _window.Arrange(new Rect(_window.DesiredSize));
+                _window.Measure(new System.Windows.Size(double.PositiveInfinity, double.PositiveInfinity));
+                _window.Arrange(new System.Windows.Rect(_window.DesiredSize));
             }
 
-            var bubbleWidth = Math.Max(_window.ActualWidth, _window.DesiredSize.Width);
-            var bubbleHeight = Math.Max(_window.ActualHeight, _window.DesiredSize.Height);
+            var bubbleWidth = Math.Max(_window.ActualWidth, Math.Max(_window.DesiredSize.Width, _panel.DesiredSize.Width));
+            var bubbleHeight = Math.Max(_window.ActualHeight, Math.Max(_window.DesiredSize.Height, _panel.DesiredSize.Height));
             if (bubbleWidth <= 0 || bubbleHeight <= 0)
             {
-                // Force a layout pass after text/theme change.
-                _panel.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
-                bubbleWidth = _panel.DesiredSize.Width;
-                bubbleHeight = _panel.DesiredSize.Height;
+                bubbleWidth = Math.Max(bubbleWidth, 80);
+                bubbleHeight = Math.Max(bubbleHeight, 28);
             }
 
-            var work = GetWorkAreaDip(caretScreen, scaleX, scaleY);
+            var work = GetWorkAreaDip(new DrawingPoint(caretX, caretY), scaleX, scaleY);
             var left = dipX;
             // Prefer below caret; flip above if not enough room.
             var topBelow = caretBottomDip + GapDip;

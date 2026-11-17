@@ -6,6 +6,7 @@ namespace WinGhostText.App.Input;
 
 /// <summary>
 /// Skips password boxes and common terminal-like controls.
+/// Win11 Notepad focuses <c>Windows.UI.Input.InputSite.WindowClass</c> — that is NOT a terminal.
 /// </summary>
 internal static class ControlClassifier
 {
@@ -17,8 +18,7 @@ internal static class ControlClassifier
         "Vim",
         "PuTTY",
         "mintty",
-        "Xming",
-        "Windows.UI.Input.InputSite.WindowClass" // often used by modern hosts; filtered further below
+        "Xming"
     ];
 
     public static bool ShouldSkip(IntPtr hwnd)
@@ -34,11 +34,68 @@ internal static class ControlClassifier
             return true;
         }
 
+        var root = NativeMethods.GetAncestor(hwnd, NativeMethods.GA_ROOT);
+        // Win11 Store Notepad / classic Notepad — never treat as terminal.
+        if (IsNotepadHost(hwnd, root, className))
+        {
+            return IsPasswordControl(hwnd, className);
+        }
+
         if (IsTerminalClass(className))
         {
             return true;
         }
 
+        if (IsPasswordControl(hwnd, className))
+        {
+            return true;
+        }
+
+        // Heuristic: window title hints for terminals
+        if (root != IntPtr.Zero)
+        {
+            var title = new StringBuilder(512);
+            _ = NativeMethods.GetWindowText(root, title, title.Capacity);
+            var t = title.ToString();
+            if (t.Contains("Command Prompt", StringComparison.OrdinalIgnoreCase) ||
+                t.Contains("PowerShell", StringComparison.OrdinalIgnoreCase) ||
+                t.Contains("Windows Terminal", StringComparison.OrdinalIgnoreCase) ||
+                t.Contains("wt.exe", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Win11 Notepad uses InputSite as hwndFocus; classic Notepad uses Edit / Notepad root.
+    /// </summary>
+    internal static bool IsNotepadHost(IntPtr hwnd, IntPtr rootHwnd, string? className = null)
+    {
+        className ??= NativeMethods.GetWindowClass(hwnd);
+        if (!string.IsNullOrEmpty(className) &&
+            className.Contains("Notepad", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var root = rootHwnd != IntPtr.Zero
+            ? rootHwnd
+            : NativeMethods.GetAncestor(hwnd, NativeMethods.GA_ROOT);
+        if (root == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        var rootClass = NativeMethods.GetWindowClass(root);
+        return rootClass.Equals("Notepad", StringComparison.OrdinalIgnoreCase) ||
+               rootClass.Equals("NotepadWindow", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsPasswordControl(IntPtr hwnd, string className)
+    {
         // Classic Win32 password edit: ES_PASSWORD = 0x0020
         if (className.Equals("Edit", StringComparison.OrdinalIgnoreCase) ||
             className.Contains("Edit", StringComparison.OrdinalIgnoreCase))
@@ -55,28 +112,7 @@ internal static class ControlClassifier
             return true;
         }
 
-        if (IsUiaPassword(hwnd))
-        {
-            return true;
-        }
-
-        // Heuristic: window title hints for terminals
-        var root = NativeMethods.GetAncestor(hwnd, NativeMethods.GA_ROOT);
-        if (root != IntPtr.Zero)
-        {
-            var title = new StringBuilder(512);
-            _ = NativeMethods.GetWindowText(root, title, title.Capacity);
-            var t = title.ToString();
-            if (t.Contains("Command Prompt", StringComparison.OrdinalIgnoreCase) ||
-                t.Contains("PowerShell", StringComparison.OrdinalIgnoreCase) ||
-                t.Contains("Windows Terminal", StringComparison.OrdinalIgnoreCase) ||
-                t.Contains("wt.exe", StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-        }
-
-        return false;
+        return IsUiaPassword(hwnd);
     }
 
     private static bool IsUiaPassword(IntPtr hwnd)

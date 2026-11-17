@@ -4,13 +4,15 @@ namespace WinGhostText.App.Input;
 
 /// <summary>
 /// Suppresses the suggestion bubble while Chinese (or other CJK) IME is in native/composition mode.
-/// English mode (e.g. WeChat IME after Shift) must allow suggestions immediately.
+/// English mode (e.g. WeChat IME after Shift, or tray ENG) must allow suggestions immediately.
+/// A Chinese keyboard layout alone must NOT suppress when conversion is non-native.
 /// </summary>
 internal static class ImeGate
 {
     private const int LangChinese = 0x04;
     private const int LangJapanese = 0x11;
     private const int LangKorean = 0x12;
+    private const int LangEnglish = 0x09;
 
     /// <summary>
     /// True when completions and Tab intercept must be disabled for this HWND.
@@ -44,7 +46,7 @@ internal static class ImeGate
 
     /// <summary>
     /// True when the focus thread's IME is in native (e.g. Chinese) conversion mode.
-    /// Shift-to-English clears <see cref="NativeMethods.IME_CMODE_NATIVE"/> and returns false.
+    /// Shift-to-English / tray ENG clears <see cref="NativeMethods.IME_CMODE_NATIVE"/> and returns false.
     /// </summary>
     public static bool IsNativeImeMode(IntPtr hwnd)
     {
@@ -57,18 +59,33 @@ internal static class ImeGate
         var hkl = NativeMethods.GetKeyboardLayout(threadId);
         var langId = (int)(hkl.ToInt64() & 0xFFFF);
         var primaryLang = langId & 0x3FF;
+
+        // Pure English layout — never treat as native CJK conversion.
+        if (primaryLang == LangEnglish)
+        {
+            return false;
+        }
+
         var isCjkLayout = primaryLang is LangChinese or LangJapanese or LangKorean;
 
         if (!TryGetImc(hwnd, out var ctxHwnd, out var himc))
         {
             // No IMC: cannot read conversion bits; only composition (handled elsewhere) gates.
+            // Chinese layout alone must not suppress English typing.
             return false;
         }
 
         try
         {
+            // Closed IME → alphanumeric input even on a CJK layout.
+            if (!NativeMethods.ImmGetOpenStatus(himc))
+            {
+                return false;
+            }
+
             if (!NativeMethods.ImmGetConversionStatus(himc, out var conversion, out _))
             {
+                // Cannot read conversion; do not suppress on layout alone.
                 return false;
             }
 
@@ -79,14 +96,8 @@ internal static class ImeGate
                 return false;
             }
 
-            // Native conversion on a CJK layout (WeChat / MS Pinyin Chinese mode).
-            if (isCjkLayout)
-            {
-                return true;
-            }
-
-            // Some IMEs keep a non-CJK HKL while native is set and open.
-            return NativeMethods.ImmGetOpenStatus(himc);
+            // Native conversion + open IME on a CJK layout (WeChat / MS Pinyin Chinese mode).
+            return isCjkLayout;
         }
         finally
         {
