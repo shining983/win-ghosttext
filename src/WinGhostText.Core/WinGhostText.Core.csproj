@@ -8,6 +8,8 @@
   </PropertyGroup>
   <ItemGroup>
     <EmbeddedResource Include="Data\english-freq.txt" LogicalName="WinGhostText.Core.Data.english-freq.txt" />
+    <EmbeddedResource Include="Data\english-extra.txt" LogicalName="WinGhostText.Core.Data.english-extra.txt" />
     <EmbeddedResource Include="Data\common-misspellings.txt" LogicalName="WinGhostText.Core.Data.common-misspellings.txt" />
+    <EmbeddedResource Include="Data\proper-nouns.txt" LogicalName="WinGhostText.Core.Data.proper-nouns.txt" />
   </ItemGroup>
 </Project>

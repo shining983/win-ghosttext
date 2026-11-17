@@ -3,7 +3,9 @@ namespace WinGhostText.Core;
 public enum SuggestionKind
 {
     Prefix,
-    Spelling
+    Spelling,
+    Grammar,
+    Capitalization
 }
 
 public sealed record CompletionSuggestion(
@@ -12,24 +14,46 @@ public sealed record CompletionSuggestion(
     SuggestionKind Kind)
 {
     /// <summary>
-    /// Text to inject (suffix for prefix completion; full replacement word for spelling).
+    /// Text to inject (suffix for prefix completion; full replacement for marks).
     /// </summary>
     public string InsertionText =>
-        Kind == SuggestionKind.Spelling
+        ReplaceTypedPrefix
             ? FullWord
-            : FullWord.Substring(TypedPrefix.Length);
+            : FullWord.Substring(Math.Min(TypedPrefix.Length, FullWord.Length));
 
     /// <summary>
-    /// Legacy suffix-style display (prefix remainder / full spelling word).
-    /// The caret-anchored suggestion bubble shows <see cref="FullWord"/> instead.
+    /// Legacy suffix-style display for prefix completions; correction marks show the fix word.
+    /// The caret-anchored bubble prefers <see cref="DisplayWord"/>.
     /// </summary>
     public string GhostDisplay =>
-        Kind == SuggestionKind.Spelling
-            ? FullWord
-            : FullWord.Substring(TypedPrefix.Length);
+        Kind == SuggestionKind.Prefix
+            ? FullWord.Substring(Math.Min(TypedPrefix.Length, FullWord.Length))
+            : DisplayWord;
 
     /// <summary>
-    /// When true, accept should delete the typed prefix before inserting FullWord.
+    /// Word shown in the suggestion bubble (trims trailing delimiters kept for accept).
     /// </summary>
-    public bool ReplaceTypedPrefix => Kind == SuggestionKind.Spelling;
+    public string DisplayWord
+    {
+        get
+        {
+            var s = FullWord;
+            var i = s.Length - 1;
+            while (i >= 0 && LocalMarkEngine.IsWordEndDelimiter(s[i]))
+            {
+                i--;
+            }
+
+            return i < 0 ? s.Trim() : s[..(i + 1)];
+        }
+    }
+
+    /// <summary>
+    /// When true, accept should delete the typed span before inserting FullWord.
+    /// </summary>
+    public bool ReplaceTypedPrefix => Kind != SuggestionKind.Prefix;
+
+    /// <summary>True for word-end spelling / grammar / capitalization marks.</summary>
+    public bool IsCorrectionMark =>
+        Kind is SuggestionKind.Spelling or SuggestionKind.Grammar or SuggestionKind.Capitalization;
 }
