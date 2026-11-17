@@ -1,0 +1,27 @@
+## Build
+bin/
+obj/
+out/
+publish/
+artifacts/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+.vs/
+*.DotSettings.user
+
+## OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+## Test / coverage
+TestResults/
+*.trx
+*.coverage
+*.coveragexml
+
+## Zip artifacts
+*.zip
+!docs/**

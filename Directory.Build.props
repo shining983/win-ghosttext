@@ -1,0 +1,6 @@
+<Project>
+  <PropertyGroup>
+    <!-- Allow restoring/compiling net8.0-windows packs on Linux CI hosts. Full WPF publish still requires Windows. -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+  </PropertyGroup>
+</Project>
