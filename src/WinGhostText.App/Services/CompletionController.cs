@@ -247,7 +247,14 @@ internal sealed class CompletionController : IDisposable
                 _current = suggestion;
             }
 
-            _overlay.Show(suggestion, focus.CaretScreen, focus.FontFamily, focus.FontSizeDip, focus.FontWeight);
+            var cellPx = focus.TargetCellHeightPx > 0 ? focus.TargetCellHeightPx : focus.CaretHeightPx;
+            _overlay.Show(
+                suggestion,
+                focus.CaretScreen,
+                focus.FontFamily,
+                focus.FontSizeDip,
+                focus.FontWeight,
+                cellPx);
         }
         catch
         {
