@@ -77,6 +77,8 @@ internal static class NativeMethods
         public RECT rcCaret;
     }
 
+    // On win-x64, sizeof(INPUT) must be 40. A keyboard-only union marshals to 32 and
+    // SendInput fails with ERROR_INVALID_PARAMETER (87), so Tab/Space accept never inserts.
     [StructLayout(LayoutKind.Sequential)]
     public struct INPUT
     {
@@ -87,7 +89,20 @@ internal static class NativeMethods
     [StructLayout(LayoutKind.Explicit)]
     public struct InputUnion
     {
+        [FieldOffset(0)] public MOUSEINPUT mi;
         [FieldOffset(0)] public KEYBDINPUT ki;
+        [FieldOffset(0)] public HARDWAREINPUT hi;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct MOUSEINPUT
+    {
+        public int dx;
+        public int dy;
+        public uint mouseData;
+        public uint dwFlags;
+        public uint time;
+        public UIntPtr dwExtraInfo;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -98,6 +113,14 @@ internal static class NativeMethods
         public uint dwFlags;
         public uint time;
         public UIntPtr dwExtraInfo;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct HARDWAREINPUT
+    {
+        public uint uMsg;
+        public ushort wParamL;
+        public ushort wParamH;
     }
 
     [DllImport("user32.dll", SetLastError = true)]
