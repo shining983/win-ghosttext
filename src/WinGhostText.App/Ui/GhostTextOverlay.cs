@@ -135,13 +135,13 @@ internal sealed class GhostTextOverlay
             var caretHeightDip = caretHeightPx > 0 ? caretHeightPx / scaleY : DefaultFontSizeDip * 1.2;
             var caretBottomDip = caretTopDip + caretHeightDip;
 
-            _panel.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
-            _panel.Arrange(new Rect(_panel.DesiredSize));
+            _panel.Measure(new System.Windows.Size(double.PositiveInfinity, double.PositiveInfinity));
+            _panel.Arrange(new System.Windows.Rect(_panel.DesiredSize));
             _window.UpdateLayout();
             if (!_window.IsMeasureValid || !_window.IsArrangeValid)
             {
-                _window.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
-                _window.Arrange(new Rect(_window.DesiredSize));
+                _window.Measure(new System.Windows.Size(double.PositiveInfinity, double.PositiveInfinity));
+                _window.Arrange(new System.Windows.Rect(_window.DesiredSize));
             }
 
             var bubbleWidth = Math.Max(_window.ActualWidth, Math.Max(_window.DesiredSize.Width, _panel.DesiredSize.Width));
