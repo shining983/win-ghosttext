@@ -6,7 +6,7 @@ using WinGhostText.Core;
 namespace WinGhostText.App.Services;
 
 /// <summary>
-/// Orchestrates hooks, gates, trie suggestions, overlay, and accept/dismiss.
+/// Orchestrates hooks, gates, trie suggestions, suggestion bubble, and accept/dismiss.
 /// Architecture is global-app ready; V1 acceptance target is Notepad.
 /// </summary>
 internal sealed class CompletionController : IDisposable
@@ -111,7 +111,7 @@ internal sealed class CompletionController : IDisposable
                 return;
 
             case VirtualKeys.Space:
-                // Space never accepts GhostText — insert a normal space and end the suggestion.
+                // Space never accepts — insert a normal space and end the suggestion.
                 Dismiss();
                 return;
 
@@ -250,15 +250,16 @@ internal sealed class CompletionController : IDisposable
                 _current = suggestion;
             }
 
-            var cellPx = focus.TargetCellHeightPx > 0 ? focus.TargetCellHeightPx : focus.CaretHeightPx;
+            // Bubble anchors to caret top/height — no baseline overlay calibration.
+            var caretHeightPx = focus.CaretHeightPx > 0
+                ? focus.CaretHeightPx
+                : focus.TargetCellHeightPx;
             _overlay.Show(
                 suggestion,
                 focus.CaretScreen,
-                focus.FontFamily,
-                focus.FontSizeDip,
-                focus.FontWeight,
-                cellPx,
-                focus.Dpi);
+                caretHeightPx,
+                focus.Dpi,
+                focus.FontSizeDip);
         }
         catch
         {

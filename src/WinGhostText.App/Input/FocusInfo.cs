@@ -46,6 +46,7 @@ internal sealed record FocusInfo(
 
         var caret = ResolveCaretScreen(hwnd, gui, out var caretHeightPx);
         var (prefix, hasSelection) = PrefixExtractor.TryReadPrefix(hwnd, className);
+        // Bubble UI only lightly scales font size — skip heavy face/weight matching.
         var font = FontProbe.TryRead(hwnd, root, className, caretHeightPx);
 
         return new FocusInfo(
@@ -68,7 +69,7 @@ internal sealed record FocusInfo(
         caretHeightPx = Math.Max(0, gui.rcCaret.Bottom - gui.rcCaret.Top);
 
         // 1) Prefer UIA TextPattern selection/caret bounding rect — Right edge is the
-        // insertion point after the caret (GhostText left). Word / Win11 Notepad / browsers.
+        // insertion point after the caret (bubble anchor X). Word / Win11 Notepad / browsers.
         if (TryGetUiaCaretScreen(hwnd, out var uiaCaret, out var uiaHeight))
         {
             if (uiaHeight > 0)
@@ -79,7 +80,7 @@ internal sealed record FocusInfo(
             return uiaCaret;
         }
 
-        // 2) GUI thread caret: use Right/Top (not Left) so overlay sits after the caret bar.
+        // 2) GUI thread caret: use Right/Top (not Left) so the bubble sits after the caret bar.
         if (HasGuiCaret(gui))
         {
             var pt = new NativeMethods.POINT
@@ -104,7 +105,7 @@ internal sealed record FocusInfo(
             }
         }
 
-        // 4) Edit client rect left/top — last-ditch so overlay is not at (0,0).
+        // 4) Edit client rect left/top — last-ditch so the bubble is not at (0,0).
         var rect = new NativeMethods.RECT();
         _ = NativeMethods.SendMessage(hwnd, NativeMethods.EM_GETRECT, IntPtr.Zero, ref rect);
         var fallback = new NativeMethods.POINT { X = rect.Left, Y = rect.Top };

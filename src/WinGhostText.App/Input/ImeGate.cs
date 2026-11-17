@@ -3,7 +3,7 @@ using WinGhostText.App.Native;
 namespace WinGhostText.App.Input;
 
 /// <summary>
-/// Suppresses GhostText while Chinese (or other CJK) IME is in native/composition mode.
+/// Suppresses the suggestion bubble while Chinese (or other CJK) IME is in native/composition mode.
 /// English mode (e.g. WeChat IME after Shift) must allow suggestions immediately.
 /// </summary>
 internal static class ImeGate
@@ -75,7 +75,7 @@ internal static class ImeGate
             var native = (conversion & NativeMethods.IME_CMODE_NATIVE) != 0;
             if (!native)
             {
-                // English / alphanumeric mode — allow GhostText even on a Chinese layout.
+                // English / alphanumeric mode — allow suggestions even on a Chinese layout.
                 return false;
             }
 
