@@ -13,6 +13,7 @@ internal sealed record FocusInfo(
     int CaretHeightPx,
     string Prefix,
     bool HasSelection,
+    string BeforeCaret,
     string? FontFamily,
     float? FontSizeDip,
     int? FontWeight,
@@ -46,7 +47,7 @@ internal sealed record FocusInfo(
         var isNotepad = ControlClassifier.IsNotepadHost(hwnd, root, className);
 
         var caret = ResolveCaretScreen(hwnd, root, gui, isNotepad, out var caretHeightPx);
-        var (prefix, hasSelection) = PrefixExtractor.TryReadPrefix(hwnd, className);
+        var read = PrefixExtractor.TryReadPrefix(hwnd, className);
         // Bubble UI only lightly scales font size — FontProbe always supplies defaults.
         var font = FontProbe.TryRead(hwnd, root, className, caretHeightPx);
 
@@ -56,8 +57,9 @@ internal sealed record FocusInfo(
             className,
             caret,
             caretHeightPx,
-            prefix,
-            hasSelection,
+            read.Prefix,
+            read.HasSelection,
+            read.BeforeCaret,
             font.Family,
             font.SizeDip,
             font.Weight,

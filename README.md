@@ -7,6 +7,9 @@ Windows 10/11 托盘轻量**英文**补全：本地词频词典，无 AI、全�
 - **UI**：光标旁输入法式气泡；贴光标附近即可，不追求与正文字号像素级对齐
 - **按键**：**Tab** 采纳；**空格** 始终是普通空格（不采纳）；**Esc** 关闭建议
 - **拼写**：轻量纠错（常见错词 + 谨慎编辑距离），含字母换位，如 `becuase` → `because`
+- **词结束标注（本地离线）**：空格/标点结束一个词后，若拼写/轻量语法/大小写有建议 → 短下划线 + 共用气泡；**Tab** 替换错跨度，**Esc** 关掉，**空格不采纳**
+- **语法**：仅规则级（a/an、轻量主谓/双情态、句首大写、`i`→`I`、专有名词大小写）——**不是**完整校对，无联网语法 API
+- **词库**：可再分发公开词频/词表扩容（非柯林斯等版权词典正文）；详见 `ATTRIBUTION.md` / `THIRD_PARTY_NOTICES.md`
 - **多应用**：浏览器、微信、Word、Obsidian 等常见场景一般可用
 - **托盘**：可随时开关 Enabled；桌面快捷方式或解压目录运行 `WinGhostText.exe`
 - **构建**：.NET 8 win-x64，`scripts/publish-zip.ps1`
@@ -21,15 +24,17 @@ Windows 10/11 托盘轻量**英文**补全：本地词频词典，无 AI、全�
 
 | 键 | 有建议时 | 无建议时 |
 |---|---|---|
-| **Tab** | 采纳补全 / 拼写纠正 | 正常 Tab |
-| **空格** | 插入普通空格并结束建议（**不会**采纳） | 正常空格 |
+| **Tab** | 采纳补全 / 词结束纠正（替换错词跨度） | 正常 Tab |
+| **空格** | 插入普通空格并结束当前建议（**不会**采纳）；随后可触发词结束检查 | 正常空格 |
 | **Esc** | 关闭建议 | 正常 Esc |
+
+补全 vs 纠正：打字中（词未结束）补全优先；空格/标点结束词后纠正优先。
 
 ## 已知问题 / 局限
 
 请按现状理解，不必当成「完美」产品：
 
-- **Win11 记事本**：气泡补全仍不稳定、经常不可用（与 `InputSite` 等路径有关）。其它应用一般正常。有未合并修复分支 [PR #10](https://github.com/shining983/win-ghosttext/pull/10)，当前**不强制合并**。
+- **Win11 记事本**：气泡补全仍可能不稳定（与 `InputSite` 等路径有关）。其它应用一般正常。
 - **中文输入法**：中文模式下仍可能出现英文补全气泡（用户可接受）。理想上应尽量不干扰组词，但现状如此；嫌吵可用托盘关掉 Enabled。
 - **密码框 / 终端**：应跳过（如 Windows Terminal、cmd、PowerShell）。
 - **网页复杂编辑区**：可能半支持（地址栏等短框更稳；复杂 `contenteditable` 可能读不到词或气泡错位）。
@@ -39,7 +44,7 @@ Windows 10/11 托盘轻量**英文**补全：本地词频词典，无 AI、全�
 
 ## 隐私
 
-全程离线，无遥测。内置英文词频表（非牛津等版权词典正文）。见 `THIRD_PARTY_NOTICES.md`。代码：MIT。
+全程离线，无遥测、无柯林斯/云端语法。内置可再分发英文词频 + 扩展词表 + 小专有名词表。见 `ATTRIBUTION.md`、`THIRD_PARTY_NOTICES.md`。代码：MIT。
 
 ---
 
@@ -81,8 +86,10 @@ scripts/publish-zip.ps1
 
 Lightweight offline English completion for Windows 10/11: local frequency dict, no AI, tray app. Suggestions show in a **caret-side bubble** (full word — not in-line gray ghost overlay). Run `WinGhostText.exe` or a desktop shortcut; tray **Enabled** toggles.
 
-**Tab** accepts; **Space** is always a normal space (does **not** accept); **Esc** dismisses. Light spelling includes letter transposition (`becuase` → `because`). Works in common apps (browser, WeChat, Word, Obsidian, etc.).
+**Tab** accepts; **Space** is always a normal space (does **not** accept); **Esc** dismisses. Light spelling includes letter transposition (`becuase` → `because`). After Space/punctuation ends a word, local marks can underline a bad span and show a correction in the **same** bubble (Tab replaces; Space still does not accept). Grammar is **rule-level only** (a/an, light SVA / double modal, sentence caps, `i`→`I`, proper-noun casing) — not full proofreading; no cloud grammar API. Lexicon sources: `ATTRIBUTION.md`.
 
-**Honest limits:** Win11 Notepad bubble is still unstable / often unavailable (`InputSite`, etc.; other apps usually OK). Open fix: [PR #10](https://github.com/shining983/win-ghosttext/pull/10) — **not** required to merge yet. Chinese IME mode may still show English bubbles (accepted). Password fields / terminals are skipped; complex web editors may be half-supported. Bubble sits near the caret; no pixel-perfect font/baseline match.
+Mid-word completion wins; after word-end, correction wins. Works in common apps (browser, WeChat, Word, Obsidian, etc.).
+
+**Honest limits:** Win11 Notepad bubble is still unstable / often unavailable (`InputSite`, etc.; other apps usually OK). Chinese IME mode may still show English bubbles (accepted). Password fields / terminals are skipped; complex web editors may be half-supported. Bubble sits near the caret; no pixel-perfect font/baseline match.
 
 Publish: `.\scripts\publish-zip.ps1` → self-contained win-x64 zip.

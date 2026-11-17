@@ -7,6 +7,15 @@ using WinGhostText.Core;
 namespace WinGhostText.App.Input;
 
 /// <summary>
+/// Prefix + casing-preserving text before the caret (for word-end marks).
+/// </summary>
+internal readonly record struct PrefixReadResult(string Prefix, bool HasSelection, string BeforeCaret)
+{
+    public static PrefixReadResult Empty => new(string.Empty, false, string.Empty);
+    public static PrefixReadResult Selected => new(string.Empty, true, string.Empty);
+}
+
+/// <summary>
 /// Reads the Latin word prefix immediately before the caret.
 /// Classic Edit/RichEdit prefer Win32; everything else uses UIA TextPattern
 /// (with FocusedElement / shallow tree search) and ValuePattern fallbacks.
@@ -17,7 +26,7 @@ internal static class PrefixExtractor
     private const int MaxTreeNodes = 48;
     private const int MaxTreeDepth = 4;
 
-    public static (string Prefix, bool HasSelection) TryReadPrefix(IntPtr hwnd, string className)
+    public static PrefixReadResult TryReadPrefix(IntPtr hwnd, string className)
     {
         try
         {
@@ -37,7 +46,7 @@ internal static class PrefixExtractor
         }
         catch
         {
-            return (string.Empty, false);
+            return PrefixReadResult.Empty;
         }
     }
 
@@ -54,7 +63,7 @@ internal static class PrefixExtractor
         return length > 0;
     }
 
-    private static (string Prefix, bool HasSelection) ReadFromWin32Edit(IntPtr hwnd)
+    private static PrefixReadResult ReadFromWin32Edit(IntPtr hwnd)
     {
         var (start, end) = ReadWin32Selection(hwnd);
         var hasSelection = end > start;
@@ -62,7 +71,7 @@ internal static class PrefixExtractor
         var length = (int)NativeMethods.SendMessage(hwnd, NativeMethods.WM_GETTEXTLENGTH, IntPtr.Zero, IntPtr.Zero);
         if (length <= 0 || start <= 0)
         {
-            return (string.Empty, hasSelection);
+            return new PrefixReadResult(string.Empty, hasSelection, string.Empty);
         }
 
         var sb = new StringBuilder(length + 1);
@@ -73,7 +82,7 @@ internal static class PrefixExtractor
             start = text.Length;
         }
 
-        return (WordPrefix.Extract(text, start), hasSelection);
+        return FromBeforeCaret(text, start, hasSelection);
     }
 
     /// <summary>
@@ -97,12 +106,12 @@ internal static class PrefixExtractor
         return (start, end);
     }
 
-    private static (string Prefix, bool HasSelection) ReadFromUiAutomation(IntPtr hwnd)
+    private static PrefixReadResult ReadFromUiAutomation(IntPtr hwnd)
     {
         var element = ResolveTextElement(hwnd);
         if (element is null)
         {
-            return (string.Empty, false);
+            return PrefixReadResult.Empty;
         }
 
         if (element.TryGetCurrentPattern(TextPattern.Pattern, out var patternObj) &&
@@ -117,13 +126,13 @@ internal static class PrefixExtractor
             valueObj is ValuePattern valuePattern)
         {
             var value = valuePattern.Current.Value ?? string.Empty;
-            return (WordPrefix.Extract(value, value.Length), false);
+            return FromBeforeCaret(value, value.Length, hasSelection: false);
         }
 
-        return (string.Empty, false);
+        return PrefixReadResult.Empty;
     }
 
-    private static (string Prefix, bool HasSelection) ReadFromTextPattern(TextPattern textPattern)
+    private static PrefixReadResult ReadFromTextPattern(TextPattern textPattern)
     {
         var selection = textPattern.GetSelection();
         if (selection.Length == 0)
@@ -133,11 +142,11 @@ internal static class PrefixExtractor
             try
             {
                 var docText = SafeGetText(textPattern.DocumentRange, MaxDocumentProbeChars);
-                return (WordPrefix.Extract(docText, docText.Length), false);
+                return FromBeforeCaret(docText, docText.Length, hasSelection: false);
             }
             catch
             {
-                return (string.Empty, false);
+                return PrefixReadResult.Empty;
             }
         }
 
@@ -146,7 +155,7 @@ internal static class PrefixExtractor
         var hasSelection = selectedText.Length > 0;
         if (hasSelection)
         {
-            return (string.Empty, true);
+            return PrefixReadResult.Selected;
         }
 
         // Preferred: text from document start → caret, then WordPrefix at end.
@@ -164,12 +173,12 @@ internal static class PrefixExtractor
             if (beforeText.Length > 0)
             {
                 // If the range was truncated from the left, keep a tail large
-                // enough for a word prefix and extract from its end.
+                // enough for a word prefix / grammar context and extract from its end.
                 var tail = beforeText.Length > 512 ? beforeText[^512..] : beforeText;
                 var prefix = WordPrefix.Extract(tail, tail.Length);
                 if (prefix.Length > 0 || EndsWithNonLetter(tail))
                 {
-                    return (prefix, false);
+                    return FromBeforeCaret(tail, tail.Length, hasSelection: false);
                 }
             }
         }
@@ -192,16 +201,44 @@ internal static class PrefixExtractor
             var partial = TrimWordToken(SafeGetText(toCaret, 128));
             if (CompletionEngine.IsLatinPrefix(partial) && partial.Length > 0)
             {
-                return (partial.ToLowerInvariant(), false);
+                // Preserve original casing in BeforeCaret for capitalization marks.
+                return new PrefixReadResult(partial.ToLowerInvariant(), false, partial);
             }
 
             var whole = TrimWordToken(SafeGetText(wordRange, 128));
-            return (ExtractTrailingLatinRun(whole), false);
+            var trailing = ExtractTrailingLatinRun(whole);
+            return new PrefixReadResult(trailing, false, trailing);
         }
         catch
         {
-            return (string.Empty, false);
+            return PrefixReadResult.Empty;
         }
+    }
+
+    private static PrefixReadResult FromBeforeCaret(string text, int caretIndex, bool hasSelection)
+    {
+        if (caretIndex < 0)
+        {
+            caretIndex = 0;
+        }
+
+        if (caretIndex > text.Length)
+        {
+            caretIndex = text.Length;
+        }
+
+        var before = caretIndex <= 0
+            ? string.Empty
+            : text[..caretIndex];
+        if (before.Length > 512)
+        {
+            before = before[^512..];
+        }
+
+        return new PrefixReadResult(
+            WordPrefix.Extract(text, caretIndex),
+            hasSelection,
+            before);
     }
 
     /// <summary>

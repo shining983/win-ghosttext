@@ -28,10 +28,15 @@ internal sealed class GhostTextOverlay
     private static readonly SolidColorBrush LightBorderBrush = CreateFrozenBrush(0xCC, 0xC0, 0xC0, 0xC0);
     private static readonly SolidColorBrush DarkBorderBrush = CreateFrozenBrush(0xCC, 0x55, 0x55, 0x55);
 
+    private static readonly SolidColorBrush UnderlineBrush = CreateFrozenBrush(0xE6, 0xD9, 0x4F, 0x3C);
+
     private readonly Window _window;
     private readonly Border _panel;
     private readonly TextBlock _text;
+    private readonly Window _underlineWindow;
+    private readonly Border _underlineBar;
     private bool _hooked;
+    private bool _underlineHooked;
 
     public GhostTextOverlay()
     {
@@ -74,7 +79,35 @@ internal sealed class GhostTextOverlay
             Content = _panel
         };
 
+        _underlineBar = new Border
+        {
+            Background = UnderlineBrush,
+            BorderThickness = new Thickness(0),
+            CornerRadius = new CornerRadius(1),
+            Height = 2,
+            Width = 24,
+            IsHitTestVisible = false
+        };
+
+        _underlineWindow = new Window
+        {
+            WindowStyle = WindowStyle.None,
+            AllowsTransparency = true,
+            Background = System.Windows.Media.Brushes.Transparent,
+            ShowInTaskbar = false,
+            Topmost = true,
+            ResizeMode = ResizeMode.NoResize,
+            ShowActivated = false,
+            Focusable = false,
+            IsHitTestVisible = false,
+            SizeToContent = SizeToContent.Manual,
+            Width = 24,
+            Height = 2,
+            Content = _underlineBar
+        };
+
         _window.SourceInitialized += (_, _) => ApplyClickThrough();
+        _underlineWindow.SourceInitialized += (_, _) => ApplyUnderlineClickThrough();
     }
 
     public bool IsVisible => _window.IsVisible;
@@ -88,6 +121,11 @@ internal sealed class GhostTextOverlay
                 _window.Hide();
             }
 
+            if (_underlineWindow.IsVisible)
+            {
+                _underlineWindow.Hide();
+            }
+
             _text.Text = string.Empty;
         }
         else
@@ -99,19 +137,21 @@ internal sealed class GhostTextOverlay
     /// <summary>
     /// Show the primary suggestion bubble anchored near the caret.
     /// Prefers below the caret; flips above when the work area has insufficient space.
+    /// Optional thin underline marks the bad span for word-end corrections.
     /// </summary>
     public void Show(
         CompletionSuggestion suggestion,
         DrawingPoint caretScreen,
         int caretHeightPx,
         uint targetDpi = 0,
-        float? preferredFontSizeDip = null)
+        float? preferredFontSizeDip = null,
+        bool showUnderline = false)
     {
         void Apply()
         {
             // Full suggested / corrected word (single primary candidate).
             // FontProbe may be weak on Win11 Notepad — defaults keep the bubble visible.
-            _text.Text = suggestion.FullWord;
+            _text.Text = suggestion.DisplayWord;
             ApplyTheme(caretScreen);
             _text.FontSize = ResolveBubbleFontSize(preferredFontSizeDip);
 
@@ -192,6 +232,15 @@ internal sealed class GhostTextOverlay
             }
 
             ApplyClickThrough();
+
+            if (showUnderline && suggestion.IsCorrectionMark)
+            {
+                ShowUnderline(suggestion, new DrawingPoint(caretX, caretY), caretHeightPx, scaleX, scaleY);
+            }
+            else if (_underlineWindow.IsVisible)
+            {
+                _underlineWindow.Hide();
+            }
         }
 
         if (_window.Dispatcher.CheckAccess())
@@ -202,6 +251,72 @@ internal sealed class GhostTextOverlay
         {
             _window.Dispatcher.Invoke(Apply);
         }
+    }
+
+    private void ShowUnderline(
+        CompletionSuggestion suggestion,
+        DrawingPoint caretScreen,
+        int caretHeightPx,
+        double scaleX,
+        double scaleY)
+    {
+        // Approximate the bad span just before the caret (exclude trailing delimiter).
+        var mark = suggestion.DisplayWord;
+        if (string.IsNullOrEmpty(mark))
+        {
+            if (_underlineWindow.IsVisible)
+            {
+                _underlineWindow.Hide();
+            }
+
+            return;
+        }
+
+        ApplyUnderlineClickThrough();
+        var fontSize = ResolveBubbleFontSize(null);
+        // Rough average glyph width — enough for a short marker, not pixel-perfect.
+        var approxCharDip = fontSize * 0.55;
+        var widthDip = Math.Clamp(mark.Length * approxCharDip, 12.0, 160.0);
+        var caretHeightDip = caretHeightPx > 0 ? caretHeightPx / scaleY : fontSize * 1.2;
+        var left = (caretScreen.X / scaleX) - widthDip;
+        var top = (caretScreen.Y / scaleY) + caretHeightDip - 1.0;
+
+        _underlineWindow.Width = widthDip;
+        _underlineWindow.Height = 2;
+        _underlineBar.Width = widthDip;
+        _underlineWindow.Left = left;
+        _underlineWindow.Top = top;
+
+        if (!_underlineWindow.IsVisible)
+        {
+            _underlineWindow.Show();
+        }
+
+        ApplyUnderlineClickThrough();
+    }
+
+    private void ApplyUnderlineClickThrough()
+    {
+        var helper = new WindowInteropHelper(_underlineWindow);
+        var hwnd = helper.Handle;
+        if (hwnd == IntPtr.Zero)
+        {
+            helper.EnsureHandle();
+            hwnd = helper.Handle;
+        }
+
+        if (hwnd == IntPtr.Zero)
+        {
+            return;
+        }
+
+        var ex = NativeMethods.GetWindowLongPtr(hwnd, NativeMethods.GWL_EXSTYLE).ToInt64();
+        ex |= NativeMethods.WS_EX_TRANSPARENT |
+              NativeMethods.WS_EX_TOOLWINDOW |
+              NativeMethods.WS_EX_NOACTIVATE |
+              NativeMethods.WS_EX_LAYERED;
+        _ = NativeMethods.SetWindowLongPtr(hwnd, NativeMethods.GWL_EXSTYLE, new IntPtr(ex));
+        _underlineHooked = true;
     }
 
     private static double ResolveBubbleFontSize(float? preferredFontSizeDip)

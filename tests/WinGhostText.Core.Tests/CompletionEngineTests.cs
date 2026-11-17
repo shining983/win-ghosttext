@@ -81,15 +81,18 @@ public class CompletionEngineTests
         // A made-up engine with a single exact word and no longer form.
         var trie = new Trie();
         trie.Insert("xyzzy", 0);
-        var spelling = new SpellingCorrector(trie, new[] { "xyzzy" }, new Dictionary<string, string>());
-        var engine = new CompletionEngine(trie, spelling, new Dictionary<string, string>());
+        var miss = new Dictionary<string, string>();
+        var spelling = new SpellingCorrector(trie, new[] { "xyzzy" }, miss);
+        var proper = new ProperNounLexicon(Array.Empty<string>());
+        var marks = new LocalMarkEngine(trie, new[] { "xyzzy" }, spelling, proper);
+        var engine = new CompletionEngine(trie, spelling, miss, marks, proper, knownWordCount: 1);
         Assert.Null(engine.Suggest("xyzzy"));
     }
 
     [Fact]
     public void Dictionary_loads_tens_of_thousands()
     {
-        Assert.True(_engine.DictionarySize >= 30_000, $"Got {_engine.DictionarySize}");
+        Assert.True(_engine.DictionarySize >= 70_000, $"Got {_engine.DictionarySize}");
     }
 }
 
