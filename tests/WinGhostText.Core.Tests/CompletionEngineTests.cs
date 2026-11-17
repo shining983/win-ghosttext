@@ -43,6 +43,9 @@ public class CompletionEngineTests
     [InlineData("recieve", "receive")]
     [InlineData("seperate", "separate")]
     [InlineData("enviroment", "environment")]
+    [InlineData("teh", "the")]
+    [InlineData("wiht", "with")]
+    [InlineData("taht", "that")]
     public void Common_misspellings_correct(string typed, string expected)
     {
         var suggestion = _engine.Suggest(typed);
@@ -50,6 +53,19 @@ public class CompletionEngineTests
         Assert.Equal(SuggestionKind.Spelling, suggestion!.Kind);
         Assert.Equal(expected, suggestion.FullWord);
         Assert.True(suggestion.ReplaceTypedPrefix);
+        Assert.Equal(expected, suggestion.InsertionText);
+        Assert.Equal(expected, suggestion.GhostDisplay);
+    }
+
+    [Fact]
+    public void Spelling_accept_path_replaces_typed_prefix()
+    {
+        var suggestion = _engine.Suggest("becuase");
+        Assert.NotNull(suggestion);
+        Assert.True(suggestion!.ReplaceTypedPrefix);
+        Assert.Equal("becuase", suggestion.TypedPrefix);
+        Assert.Equal("because", suggestion.FullWord);
+        Assert.Equal("because", suggestion.InsertionText);
     }
 
     [Fact]
@@ -95,13 +111,75 @@ public class TrieTests
 public class SpellingCorrectorTests
 {
     [Fact]
-    public void Levenshtein_respects_max()
+    public void Damerau_counts_adjacent_transposition_as_one()
     {
-        // Standard Levenshtein counts letter transposition as 2 edits.
-        Assert.Equal(2, SpellingCorrector.Levenshtein("becuase", "because", 2));
-        Assert.Equal(2, SpellingCorrector.Levenshtein("recieve", "receive", 2));
-        Assert.Equal(1, SpellingCorrector.Levenshtein("adress", "address", 2));
-        Assert.Equal(-1, SpellingCorrector.Levenshtein("abcdef", "ghijkl", 2));
+        Assert.Equal(1, SpellingCorrector.DamerauLevenshtein("becuase", "because", 2));
+        Assert.Equal(1, SpellingCorrector.DamerauLevenshtein("recieve", "receive", 2));
+        Assert.Equal(1, SpellingCorrector.DamerauLevenshtein("adress", "address", 2));
+        Assert.Equal(-1, SpellingCorrector.DamerauLevenshtein("abcdef", "ghijkl", 2));
+    }
+
+    [Fact]
+    public void Adjacent_transposition_finds_dictionary_word()
+    {
+        var trie = new Trie();
+        trie.Insert("because", 10);
+        trie.Insert("receive", 10);
+        trie.Insert("from", 10);
+        var spelling = new SpellingCorrector(
+            trie,
+            new[] { "because", "receive", "from" },
+            new Dictionary<string, string>());
+
+        Assert.Equal("because", spelling.Correct("becuase"));
+        Assert.Equal("receive", spelling.Correct("recieve"));
+        Assert.Equal("from", spelling.Correct("form"));
+    }
+
+    [Fact]
+    public void Explicit_transposition_requires_length_at_least_four()
+    {
+        var trie = new Trie();
+        trie.Insert("the", 10);
+        trie.Insert("because", 10);
+        var spelling = new SpellingCorrector(
+            trie,
+            new[] { "the", "because" },
+            new Dictionary<string, string>());
+
+        // Length 3: adjacent-swap helper skips; length ≥ 4 finds dictionary hits.
+        Assert.Null(spelling.TryAdjacentTransposition("teh"));
+        Assert.Equal("because", spelling.TryAdjacentTransposition("becuase"));
+    }
+
+    [Fact]
+    public void Short_words_use_max_distance_one()
+    {
+        var trie = new Trie();
+        trie.Insert("apple", 10);
+        trie.Insert("apply", 10);
+        // "apxle" → "apple" is 1 substitution; "aqxle" needs 2 and should fail for length 5.
+        var spelling = new SpellingCorrector(
+            trie,
+            new[] { "apple", "apply" },
+            new Dictionary<string, string>());
+
+        Assert.Equal("apple", spelling.Correct("apxle"));
+        Assert.Null(spelling.Correct("aqxle"));
+    }
+
+    [Fact]
+    public void Long_words_allow_distance_two()
+    {
+        var trie = new Trie();
+        trie.Insert("environment", 10);
+        var spelling = new SpellingCorrector(
+            trie,
+            new[] { "environment" },
+            new Dictionary<string, string>());
+
+        // Two substitutions on a length-11 token (needs maxDist=2).
+        Assert.Equal("environment", spelling.Correct("envixanment"));
     }
 }
 

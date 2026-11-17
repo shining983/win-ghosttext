@@ -16,7 +16,8 @@ internal sealed record FocusInfo(
     string? FontFamily,
     float? FontSizeDip,
     int? FontWeight,
-    int TargetCellHeightPx)
+    int TargetCellHeightPx,
+    uint Dpi)
 {
     public static FocusInfo? TryCapture()
     {
@@ -41,9 +42,9 @@ internal sealed record FocusInfo(
 
         var className = NativeMethods.GetWindowClass(hwnd);
         var root = NativeMethods.GetAncestor(hwnd, NativeMethods.GA_ROOT);
+        var dpi = NativeMethods.GetWindowDpi(hwnd);
 
-        var caret = ResolveCaretScreen(hwnd, gui);
-        var caretHeightPx = Math.Max(0, gui.rcCaret.Bottom - gui.rcCaret.Top);
+        var caret = ResolveCaretScreen(hwnd, gui, out var caretHeightPx);
         var (prefix, hasSelection) = PrefixExtractor.TryReadPrefix(hwnd, className);
         var font = FontProbe.TryRead(hwnd, root, className, caretHeightPx);
 
@@ -58,17 +59,32 @@ internal sealed record FocusInfo(
             font.Family,
             font.SizeDip,
             font.Weight,
-            font.TargetCellHeightPx);
+            font.TargetCellHeightPx,
+            dpi);
     }
 
-    private static Point ResolveCaretScreen(IntPtr hwnd, NativeMethods.GUITHREADINFO gui)
+    private static Point ResolveCaretScreen(IntPtr hwnd, NativeMethods.GUITHREADINFO gui, out int caretHeightPx)
     {
-        // 1) Prefer GUI thread caret rect when available (classic Edit / many Win32 hosts).
+        caretHeightPx = Math.Max(0, gui.rcCaret.Bottom - gui.rcCaret.Top);
+
+        // 1) Prefer UIA TextPattern selection/caret bounding rect — Right edge is the
+        // insertion point after the caret (GhostText left). Word / Win11 Notepad / browsers.
+        if (TryGetUiaCaretScreen(hwnd, out var uiaCaret, out var uiaHeight))
+        {
+            if (uiaHeight > 0)
+            {
+                caretHeightPx = uiaHeight;
+            }
+
+            return uiaCaret;
+        }
+
+        // 2) GUI thread caret: use Right/Top (not Left) so overlay sits after the caret bar.
         if (HasGuiCaret(gui))
         {
             var pt = new NativeMethods.POINT
             {
-                X = gui.rcCaret.Left,
+                X = gui.rcCaret.Right,
                 Y = gui.rcCaret.Top
             };
             var caretHwnd = gui.hwndCaret != IntPtr.Zero ? gui.hwndCaret : hwnd;
@@ -78,7 +94,7 @@ internal sealed record FocusInfo(
             }
         }
 
-        // 2) Thread-local GetCaretPos (same process / attached caret).
+        // 3) Thread-local GetCaretPos (same process / attached caret).
         if (NativeMethods.GetCaretPos(out var caretPos))
         {
             var pt = caretPos;
@@ -86,12 +102,6 @@ internal sealed record FocusInfo(
             {
                 return new Point(pt.X, pt.Y);
             }
-        }
-
-        // 3) UIA TextPattern selection bounding rect (Word, Win11 Notepad, some browsers).
-        if (TryGetUiaCaretScreen(hwnd, out var uiaCaret))
-        {
-            return uiaCaret;
         }
 
         // 4) Edit client rect left/top — last-ditch so overlay is not at (0,0).
@@ -114,9 +124,10 @@ internal sealed record FocusInfo(
         gui.rcCaret.Right != gui.rcCaret.Left ||
         gui.rcCaret.Bottom != gui.rcCaret.Top;
 
-    private static bool TryGetUiaCaretScreen(IntPtr hwnd, out Point point)
+    private static bool TryGetUiaCaretScreen(IntPtr hwnd, out Point point, out int heightPx)
     {
         point = Point.Empty;
+        heightPx = 0;
         try
         {
             AutomationElement? element = null;
@@ -167,12 +178,16 @@ internal sealed record FocusInfo(
 
             var rect = rects[0];
             if (double.IsNaN(rect.X) || double.IsNaN(rect.Y) ||
-                double.IsInfinity(rect.X) || double.IsInfinity(rect.Y))
+                double.IsInfinity(rect.X) || double.IsInfinity(rect.Y) ||
+                double.IsNaN(rect.Width) || double.IsNaN(rect.Height))
             {
                 return false;
             }
 
-            point = new Point((int)Math.Round(rect.X), (int)Math.Round(rect.Y));
+            // Right edge = insertion point after the caret / selection end.
+            var right = rect.X + Math.Max(0, rect.Width);
+            point = new Point((int)Math.Round(right), (int)Math.Round(rect.Y));
+            heightPx = Math.Max(0, (int)Math.Round(rect.Height));
             return true;
         }
         catch

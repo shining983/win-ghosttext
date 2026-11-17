@@ -17,10 +17,13 @@ namespace WinGhostText.App.Ui;
 /// </summary>
 internal sealed class GhostTextOverlay
 {
-    // Previous brush was ARGB(0x99, 0x80, 0x80, 0x80) — ~#B3 on white / ~#59 on dark, too faint.
-    // Theme-aware mid-grays stay readable as "ghost" (not typed black/white) on both Notepad themes.
+    // Light theme: darker mid-gray so the suffix reads as ghost on pale editors.
     private static readonly SolidColorBrush LightThemeGhostBrush = CreateFrozenBrush(0xD0, 0x5A, 0x5A, 0x5A);
-    private static readonly SolidColorBrush DarkThemeGhostBrush = CreateFrozenBrush(0xD0, 0xA8, 0xA8, 0xA8);
+    // Dark theme (Win11 dark Notepad): brighter #B0B0B0 with higher alpha for contrast.
+    private static readonly SolidColorBrush DarkThemeGhostBrush = CreateFrozenBrush(0xE6, 0xB0, 0xB0, 0xB0);
+
+    /// <summary>Minimum |blendedFg - bgLuma| before we swap to the other theme brush.</summary>
+    private const int MinContrastDelta = 48;
 
     private readonly Window _window;
     private readonly TextBlock _text;
@@ -91,7 +94,8 @@ internal sealed class GhostTextOverlay
         string? fontFamily,
         float? fontSizeDip,
         int? fontWeight = null,
-        int targetCellHeightPx = 0)
+        int targetCellHeightPx = 0,
+        uint targetDpi = 0)
     {
         void Apply()
         {
@@ -127,12 +131,10 @@ internal sealed class GhostTextOverlay
             // Create HWND first (no Show yet) so per-monitor DPI / FormattedText are correct.
             ApplyClickThrough();
 
-            var dpi = VisualTreeHelper.GetDpi(_window);
-            var pixelsPerDip = dpi.PixelsPerDip > 0 ? dpi.PixelsPerDip : 1.0;
-            var scaleX = dpi.DpiScaleX > 0 ? dpi.DpiScaleX : 1.0;
-            var scaleY = dpi.DpiScaleY > 0 ? dpi.DpiScaleY : 1.0;
+            // Prefer the focused editor's GetDpiForWindow so physical px ↔ DIP matches the caret.
+            var (scaleX, scaleY, pixelsPerDip) = ResolveDpiScales(targetDpi);
 
-            // Physical caret → DIP using the overlay's monitor scale (PerMonitorV2).
+            // Physical caret → DIP using the editor (or overlay) monitor scale (PerMonitorV2).
             var dipX = caretScreen.X / scaleX;
             var dipY = caretScreen.Y / scaleY;
             var cellHeightDip = targetCellHeightPx > 0
@@ -162,10 +164,12 @@ internal sealed class GhostTextOverlay
             }
             else
             {
-                top = dipY - 1;
+                // No caret-cell metrics: align top to caret top (no brittle caretTop-1 fudge).
+                top = dipY;
             }
 
-            _window.Left = dipX + 1;
+            // Caret screen point is already the insertion Right edge — no extra horizontal nudge.
+            _window.Left = dipX;
             _window.Top = top;
 
             if (!_window.IsVisible)
@@ -184,6 +188,24 @@ internal sealed class GhostTextOverlay
         {
             _window.Dispatcher.Invoke(Apply);
         }
+    }
+
+    private (double ScaleX, double ScaleY, double PixelsPerDip) ResolveDpiScales(uint targetDpi)
+    {
+        if (targetDpi > 0)
+        {
+            var scale = targetDpi / (double)NativeMethods.DEFAULT_DPI;
+            if (scale > 0)
+            {
+                return (scale, scale, scale);
+            }
+        }
+
+        var dpi = VisualTreeHelper.GetDpi(_window);
+        var scaleX = dpi.DpiScaleX > 0 ? dpi.DpiScaleX : 1.0;
+        var scaleY = dpi.DpiScaleY > 0 ? dpi.DpiScaleY : 1.0;
+        var pixelsPerDip = dpi.PixelsPerDip > 0 ? dpi.PixelsPerDip : 1.0;
+        return (scaleX, scaleY, pixelsPerDip);
     }
 
     private void CalibrateToCellHeight(double cellHeightDip, double pixelsPerDip)
@@ -231,21 +253,47 @@ internal sealed class GhostTextOverlay
 
     /// <summary>
     /// Pick a darker (light theme) or lighter (dark theme) mid-gray so the suffix stays visible
-    /// without matching typed text. Prefers sampling the editor background near the caret.
+    /// without matching typed text. Prefers sampling the editor background near the caret;
+    /// swaps brushes when contrast against the sampled background is too low.
     /// </summary>
     private static SolidColorBrush ResolveGhostBrush(System.Drawing.Point caretScreen)
     {
-        if (TrySampleEditorIsLight(caretScreen, out var isLight))
+        if (TrySampleBackgroundLuma(caretScreen, out var bgLuma))
         {
-            return isLight ? LightThemeGhostBrush : DarkThemeGhostBrush;
+            var isLight = bgLuma >= 128;
+            var primary = isLight ? LightThemeGhostBrush : DarkThemeGhostBrush;
+            if (ContrastDelta(primary, bgLuma) >= MinContrastDelta)
+            {
+                return primary;
+            }
+
+            var fallback = isLight ? DarkThemeGhostBrush : LightThemeGhostBrush;
+            if (ContrastDelta(fallback, bgLuma) > ContrastDelta(primary, bgLuma))
+            {
+                return fallback;
+            }
+
+            return primary;
         }
 
         return AppsUseLightTheme() ? LightThemeGhostBrush : DarkThemeGhostBrush;
     }
 
-    private static bool TrySampleEditorIsLight(System.Drawing.Point caretScreen, out bool isLight)
+    /// <summary>
+    /// Approximate luminance delta between a semi-transparent ghost brush and an opaque background.
+    /// </summary>
+    internal static int ContrastDelta(SolidColorBrush brush, int bgLuma)
     {
-        isLight = true;
+        var c = brush.Color;
+        var fgLuma = (c.R * 299 + c.G * 587 + c.B * 114) / 1000;
+        var alpha = c.A / 255.0;
+        var blended = (int)Math.Round(fgLuma * alpha + bgLuma * (1.0 - alpha));
+        return Math.Abs(blended - bgLuma);
+    }
+
+    private static bool TrySampleBackgroundLuma(System.Drawing.Point caretScreen, out int luma)
+    {
+        luma = 128;
         var hdc = NativeMethods.GetDC(IntPtr.Zero);
         if (hdc == IntPtr.Zero)
         {
@@ -254,13 +302,14 @@ internal sealed class GhostTextOverlay
 
         try
         {
-            // Prefer a point just above the caret (usually empty editor chrome), then slightly
-            // to the right (ahead of typed text) so we sample background, not glyphs.
+            // Prefer points that are usually empty editor chrome (above / ahead of glyphs),
+            // not the caret bar or typed text — especially important on dark Notepad.
             var samples = new (int X, int Y)[]
             {
-                (caretScreen.X, Math.Max(0, caretScreen.Y - 3)),
-                (caretScreen.X + 24, caretScreen.Y),
-                (caretScreen.X + 8, Math.Max(0, caretScreen.Y - 2))
+                (caretScreen.X + 28, Math.Max(0, caretScreen.Y - 4)),
+                (caretScreen.X + 40, caretScreen.Y + 2),
+                (caretScreen.X + 16, Math.Max(0, caretScreen.Y - 6)),
+                (Math.Max(0, caretScreen.X - 2), Math.Max(0, caretScreen.Y - 8))
             };
 
             long lumaSum = 0;
@@ -285,7 +334,7 @@ internal sealed class GhostTextOverlay
                 return false;
             }
 
-            isLight = (lumaSum / count) >= 128;
+            luma = (int)(lumaSum / count);
             return true;
         }
         finally

@@ -20,7 +20,9 @@ public sealed record CompletionSuggestion(
             : FullWord.Substring(TypedPrefix.Length);
 
     /// <summary>
-    /// GhostText display string shown after the caret (suffix, or "→ word" for spelling).
+    /// GhostText display string shown after the caret.
+    /// Prefix completions show the unfinished suffix; spelling always shows the full
+    /// corrected word so the replace-on-Tab path stays readable (not an empty/opaque hint).
     /// </summary>
     public string GhostDisplay =>
         Kind == SuggestionKind.Spelling
