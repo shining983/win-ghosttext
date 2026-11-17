@@ -6,15 +6,31 @@ using WinGhostText.Core;
 
 namespace WinGhostText.App.Input;
 
+/// <summary>
+/// Reads the Latin word prefix immediately before the caret.
+/// Classic Edit/RichEdit prefer Win32; everything else uses UIA TextPattern
+/// (with FocusedElement / shallow tree search) and ValuePattern fallbacks.
+/// </summary>
 internal static class PrefixExtractor
 {
+    private const int MaxDocumentProbeChars = 8 * 1024;
+    private const int MaxTreeNodes = 48;
+    private const int MaxTreeDepth = 4;
+
     public static (string Prefix, bool HasSelection) TryReadPrefix(IntPtr hwnd, string className)
     {
         try
         {
             if (IsWin32Edit(className))
             {
-                return ReadFromWin32Edit(hwnd);
+                var win32 = ReadFromWin32Edit(hwnd);
+                // Trust Win32 when it sees text or a selection. If the control
+                // advertises Edit/RichEdit but exposes no Win32 text (common in
+                // some hosts), fall through to UIA.
+                if (win32.Prefix.Length > 0 || win32.HasSelection || Win32ReportsText(hwnd))
+                {
+                    return win32;
+                }
             }
 
             return ReadFromUiAutomation(hwnd);
@@ -32,11 +48,15 @@ internal static class PrefixExtractor
         className.Equals("RichEdit50W", StringComparison.OrdinalIgnoreCase) ||
         className.Contains("RichEdit", StringComparison.OrdinalIgnoreCase);
 
+    private static bool Win32ReportsText(IntPtr hwnd)
+    {
+        var length = (int)NativeMethods.SendMessage(hwnd, NativeMethods.WM_GETTEXTLENGTH, IntPtr.Zero, IntPtr.Zero);
+        return length > 0;
+    }
+
     private static (string Prefix, bool HasSelection) ReadFromWin32Edit(IntPtr hwnd)
     {
-        var sel = NativeMethods.SendMessage(hwnd, NativeMethods.EM_GETSEL, IntPtr.Zero, IntPtr.Zero);
-        var start = (int)(sel.ToInt64() & 0xFFFF);
-        var end = (int)((sel.ToInt64() >> 16) & 0xFFFF);
+        var (start, end) = ReadWin32Selection(hwnd);
         var hasSelection = end > start;
 
         var length = (int)NativeMethods.SendMessage(hwnd, NativeMethods.WM_GETTEXTLENGTH, IntPtr.Zero, IntPtr.Zero);
@@ -56,9 +76,30 @@ internal static class PrefixExtractor
         return (WordPrefix.Extract(text, start), hasSelection);
     }
 
+    /// <summary>
+    /// Rich Edit caret indices are 32-bit; classic EM_GETSEL only returns 16-bit
+    /// packed values and breaks past 64k characters. EM_EXGETSEL always returns 0
+    /// (result is in CHARRANGE), so we pick the API by class name.
+    /// </summary>
+    private static (int Start, int End) ReadWin32Selection(IntPtr hwnd)
+    {
+        var className = NativeMethods.GetWindowClass(hwnd);
+        if (className.Contains("RichEdit", StringComparison.OrdinalIgnoreCase))
+        {
+            var range = new NativeMethods.CHARRANGE();
+            _ = NativeMethods.SendMessage(hwnd, NativeMethods.EM_EXGETSEL, IntPtr.Zero, ref range);
+            return (range.cpMin, range.cpMax);
+        }
+
+        var sel = NativeMethods.SendMessage(hwnd, NativeMethods.EM_GETSEL, IntPtr.Zero, IntPtr.Zero);
+        var start = (int)(sel.ToInt64() & 0xFFFF);
+        var end = (int)((sel.ToInt64() >> 16) & 0xFFFF);
+        return (start, end);
+    }
+
     private static (string Prefix, bool HasSelection) ReadFromUiAutomation(IntPtr hwnd)
     {
-        var element = AutomationElement.FromHandle(hwnd);
+        var element = ResolveTextElement(hwnd);
         if (element is null)
         {
             return (string.Empty, false);
@@ -67,48 +108,11 @@ internal static class PrefixExtractor
         if (element.TryGetCurrentPattern(TextPattern.Pattern, out var patternObj) &&
             patternObj is TextPattern textPattern)
         {
-            var selection = textPattern.GetSelection();
-            var hasSelection = selection.Length > 0 &&
-                               selection[0].GetText(-1).Length > 0;
-
-            var caretRange = selection.Length > 0
-                ? selection[0]
-                : textPattern.GetVisibleRanges().FirstOrDefault() ?? textPattern.DocumentRange;
-
-            // Expand backward for the current word using a clone moved to the selection start.
-            var range = caretRange.Clone();
-            range.ExpandToEnclosingUnit(TextUnit.Word);
-            var word = range.GetText(128) ?? string.Empty;
-
-            // If there is a selection spanning multiple chars, hide suggestions.
-            if (hasSelection)
-            {
-                return (string.Empty, true);
-            }
-
-            // Prefer characters immediately before caret inside the word range.
-            // UIA word units can include trailing spaces — trim carefully.
-            word = TrimWordToken(word);
-            if (!CompletionEngine.IsLatinPrefix(word) || word.Length == 0)
-            {
-                // Fallback: document text up to selection.
-                try
-                {
-                    var doc = textPattern.DocumentRange.GetText(8 * 1024) ?? string.Empty;
-                    var selText = selection.Length > 0 ? selection[0].GetText(-1) : string.Empty;
-                    // Without a reliable caret index, use trailing Latin run of the word unit.
-                    return (ExtractTrailingLatinRun(word), false);
-                }
-                catch
-                {
-                    return (ExtractTrailingLatinRun(word), false);
-                }
-            }
-
-            return (word.ToLowerInvariant(), false);
+            return ReadFromTextPattern(textPattern);
         }
 
-        // ValuePattern fallback (single-line)
+        // ValuePattern fallback (many single-line WPF/WinUI/omnibox-like fields).
+        // Without a caret index, assume end-of-value (common while typing).
         if (element.TryGetCurrentPattern(ValuePattern.Pattern, out var valueObj) &&
             valueObj is ValuePattern valuePattern)
         {
@@ -117,6 +121,239 @@ internal static class PrefixExtractor
         }
 
         return (string.Empty, false);
+    }
+
+    private static (string Prefix, bool HasSelection) ReadFromTextPattern(TextPattern textPattern)
+    {
+        var selection = textPattern.GetSelection();
+        if (selection.Length == 0)
+        {
+            // No selection ranges — try document end as last resort.
+            var docText = SafeGetText(textPattern.DocumentRange, MaxDocumentProbeChars);
+            return (WordPrefix.Extract(docText, docText.Length), false);
+        }
+
+        var caretRange = selection[0];
+        var selectedText = SafeGetText(caretRange, 256);
+        var hasSelection = selectedText.Length > 0;
+        if (hasSelection)
+        {
+            return (string.Empty, true);
+        }
+
+        // Preferred: text from document start → caret, then WordPrefix at end.
+        // Caps document probe so large Word/browser docs stay cheap.
+        try
+        {
+            var beforeCaret = caretRange.Clone();
+            beforeCaret.MoveEndpointByRange(
+                TextPatternRangeEndpoint.Start,
+                textPattern.DocumentRange,
+                TextPatternRangeEndpoint.Start);
+
+            var beforeText = SafeGetText(beforeCaret, MaxDocumentProbeChars);
+            if (beforeText.Length > 0)
+            {
+                // If the range was truncated from the left, keep a tail large
+                // enough for a word prefix and extract from its end.
+                var tail = beforeText.Length > 512 ? beforeText[^512..] : beforeText;
+                var prefix = WordPrefix.Extract(tail, tail.Length);
+                if (prefix.Length > 0 || EndsWithNonLetter(tail))
+                {
+                    return (prefix, false);
+                }
+            }
+        }
+        catch
+        {
+            // Fall through to word-unit strategy.
+        }
+
+        // Fallback: expand to enclosing word, then take only the span from
+        // word-start → caret (avoids including characters after the caret).
+        try
+        {
+            var wordRange = caretRange.Clone();
+            wordRange.ExpandToEnclosingUnit(TextUnit.Word);
+            var toCaret = wordRange.Clone();
+            toCaret.MoveEndpointByRange(
+                TextPatternRangeEndpoint.End,
+                caretRange,
+                TextPatternRangeEndpoint.Start);
+            var partial = TrimWordToken(SafeGetText(toCaret, 128));
+            if (CompletionEngine.IsLatinPrefix(partial) && partial.Length > 0)
+            {
+                return (partial.ToLowerInvariant(), false);
+            }
+
+            var whole = TrimWordToken(SafeGetText(wordRange, 128));
+            return (ExtractTrailingLatinRun(whole), false);
+        }
+        catch
+        {
+            return (string.Empty, false);
+        }
+    }
+
+    /// <summary>
+    /// Prefer the hwnd element; else focused UIA node; else shallow TextPattern search.
+    /// Helps Chromium/Electron and composite Win11 hosts where hwnd ≠ text peer.
+    /// </summary>
+    private static AutomationElement? ResolveTextElement(IntPtr hwnd)
+    {
+        AutomationElement? fromHwnd = null;
+        try
+        {
+            if (hwnd != IntPtr.Zero)
+            {
+                fromHwnd = AutomationElement.FromHandle(hwnd);
+            }
+        }
+        catch
+        {
+            fromHwnd = null;
+        }
+
+        if (fromHwnd is not null && SupportsTextOrValue(fromHwnd))
+        {
+            return fromHwnd;
+        }
+
+        try
+        {
+            var focused = AutomationElement.FocusedElement;
+            if (focused is not null && SupportsTextOrValue(focused))
+            {
+                return focused;
+            }
+        }
+        catch
+        {
+            // Ignore focus lookup failures.
+        }
+
+        if (fromHwnd is not null)
+        {
+            var nested = FindTextPatternDescendant(fromHwnd);
+            if (nested is not null)
+            {
+                return nested;
+            }
+
+            return fromHwnd;
+        }
+
+        return null;
+    }
+
+    private static bool SupportsTextOrValue(AutomationElement element)
+    {
+        try
+        {
+            if (element.TryGetCurrentPattern(TextPattern.Pattern, out _))
+            {
+                return true;
+            }
+
+            if (element.TryGetCurrentPattern(ValuePattern.Pattern, out _))
+            {
+                return true;
+            }
+        }
+        catch
+        {
+            return false;
+        }
+
+        return false;
+    }
+
+    private static AutomationElement? FindTextPatternDescendant(AutomationElement root)
+    {
+        try
+        {
+            var walker = TreeWalker.ControlViewWalker;
+            var queue = new Queue<(AutomationElement Element, int Depth)>();
+            queue.Enqueue((root, 0));
+            var visited = 0;
+
+            while (queue.Count > 0 && visited < MaxTreeNodes)
+            {
+                var (current, depth) = queue.Dequeue();
+                visited++;
+
+                if (depth > 0)
+                {
+                    try
+                    {
+                        if (current.TryGetCurrentPattern(TextPattern.Pattern, out _))
+                        {
+                            return current;
+                        }
+                    }
+                    catch
+                    {
+                        // Skip inaccessible nodes.
+                    }
+                }
+
+                if (depth >= MaxTreeDepth)
+                {
+                    continue;
+                }
+
+                AutomationElement? child;
+                try
+                {
+                    child = walker.GetFirstChild(current);
+                }
+                catch
+                {
+                    continue;
+                }
+
+                while (child is not null)
+                {
+                    queue.Enqueue((child, depth + 1));
+                    try
+                    {
+                        child = walker.GetNextSibling(child);
+                    }
+                    catch
+                    {
+                        break;
+                    }
+                }
+            }
+        }
+        catch
+        {
+            return null;
+        }
+
+        return null;
+    }
+
+    private static string SafeGetText(TextPatternRange range, int maxLength)
+    {
+        try
+        {
+            return range.GetText(maxLength) ?? string.Empty;
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
+    private static bool EndsWithNonLetter(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return true;
+        }
+
+        return !WordPrefix.IsLatinLetter(text[^1]);
     }
 
     private static string TrimWordToken(string word)

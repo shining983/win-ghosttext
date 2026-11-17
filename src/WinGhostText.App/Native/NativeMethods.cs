@@ -14,9 +14,12 @@ internal static class NativeMethods
     public const int WM_GETTEXT = 0x000D;
     public const int WM_GETTEXTLENGTH = 0x000E;
     public const int WM_GETFONT = 0x0031;
+    public const int WM_USER = 0x0400;
     public const int EM_GETSEL = 0x00B0;
     public const int EM_REPLACESEL = 0x00C2;
     public const int EM_GETRECT = 0x00B2;
+    /// <summary>Rich Edit 32-bit selection (CHARRANGE). Prefer over EM_GETSEL past 64k chars.</summary>
+    public const int EM_EXGETSEL = WM_USER + 52;
     public const int LOGPIXELSY = 90;
     public const int DEFAULT_DPI = 96;
 
@@ -146,6 +149,13 @@ internal static class NativeMethods
         public string lfFaceName;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    public struct CHARRANGE
+    {
+        public int cpMin;
+        public int cpMax;
+    }
+
     [DllImport("user32.dll", SetLastError = true)]
     public static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc lpfn, IntPtr hMod, uint dwThreadId);
 
@@ -191,6 +201,9 @@ internal static class NativeMethods
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     public static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, ref RECT lParam);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, ref CHARRANGE lParam);
 
     [DllImport("user32.dll")]
     public static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);

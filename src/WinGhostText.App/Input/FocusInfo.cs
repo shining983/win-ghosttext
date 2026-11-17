@@ -1,4 +1,6 @@
 using System.Drawing;
+using System.Windows.Automation;
+using System.Windows.Automation.Text;
 using WinGhostText.App.Native;
 
 namespace WinGhostText.App.Input;
@@ -24,7 +26,6 @@ internal sealed record FocusInfo(
             return null;
         }
 
-        _ = NativeMethods.GetWindowThreadProcessId(foreground, out _);
         var gui = new NativeMethods.GUITHREADINFO { cbSize = System.Runtime.InteropServices.Marshal.SizeOf<NativeMethods.GUITHREADINFO>() };
         var threadId = NativeMethods.GetWindowThreadProcessId(foreground, out _);
         if (!NativeMethods.GetGUIThreadInfo(threadId, ref gui))
@@ -62,10 +63,8 @@ internal sealed record FocusInfo(
 
     private static Point ResolveCaretScreen(IntPtr hwnd, NativeMethods.GUITHREADINFO gui)
     {
-        // Prefer GUI thread caret rect when available.
-        if (gui.hwndCaret != IntPtr.Zero ||
-            gui.rcCaret.Right != gui.rcCaret.Left ||
-            gui.rcCaret.Bottom != gui.rcCaret.Top)
+        // 1) Prefer GUI thread caret rect when available (classic Edit / many Win32 hosts).
+        if (HasGuiCaret(gui))
         {
             var pt = new NativeMethods.POINT
             {
@@ -79,16 +78,23 @@ internal sealed record FocusInfo(
             }
         }
 
+        // 2) Thread-local GetCaretPos (same process / attached caret).
         if (NativeMethods.GetCaretPos(out var caretPos))
         {
             var pt = caretPos;
-            if (NativeMethods.ClientToScreen(hwnd, ref pt))
+            if (NativeMethods.ClientToScreen(hwnd, ref pt) && (pt.X != 0 || pt.Y != 0))
             {
                 return new Point(pt.X, pt.Y);
             }
         }
 
-        // Fallback: edit client rect left/top.
+        // 3) UIA TextPattern selection bounding rect (Word, Win11 Notepad, some browsers).
+        if (TryGetUiaCaretScreen(hwnd, out var uiaCaret))
+        {
+            return uiaCaret;
+        }
+
+        // 4) Edit client rect left/top — last-ditch so overlay is not at (0,0).
         var rect = new NativeMethods.RECT();
         _ = NativeMethods.SendMessage(hwnd, NativeMethods.EM_GETRECT, IntPtr.Zero, ref rect);
         var fallback = new NativeMethods.POINT { X = rect.Left, Y = rect.Top };
@@ -98,5 +104,80 @@ internal sealed record FocusInfo(
         }
 
         return Point.Empty;
+    }
+
+    /// <summary>
+    /// Win32 caret is typically a zero-width line (Left==Right) with non-zero height.
+    /// Require a non-empty rect so a stale hwndCaret with 0×0 does not block UIA.
+    /// </summary>
+    private static bool HasGuiCaret(NativeMethods.GUITHREADINFO gui) =>
+        gui.rcCaret.Right != gui.rcCaret.Left ||
+        gui.rcCaret.Bottom != gui.rcCaret.Top;
+
+    private static bool TryGetUiaCaretScreen(IntPtr hwnd, out Point point)
+    {
+        point = Point.Empty;
+        try
+        {
+            AutomationElement? element = null;
+            try
+            {
+                element = AutomationElement.FromHandle(hwnd);
+            }
+            catch
+            {
+                // ignore
+            }
+
+            if (element is null ||
+                !element.TryGetCurrentPattern(TextPattern.Pattern, out var patternObj) ||
+                patternObj is not TextPattern textPattern)
+            {
+                try
+                {
+                    element = AutomationElement.FocusedElement;
+                }
+                catch
+                {
+                    return false;
+                }
+
+                if (element is null ||
+                    !element.TryGetCurrentPattern(TextPattern.Pattern, out patternObj) ||
+                    patternObj is not TextPattern focusedPattern)
+                {
+                    return false;
+                }
+
+                textPattern = focusedPattern;
+            }
+
+            var selection = textPattern.GetSelection();
+            if (selection.Length == 0)
+            {
+                return false;
+            }
+
+            // WPF UIA returns screen Rect[]; degenerate carets often have Width==0.
+            var rects = selection[0].GetBoundingRectangles();
+            if (rects is null || rects.Length == 0)
+            {
+                return false;
+            }
+
+            var rect = rects[0];
+            if (double.IsNaN(rect.X) || double.IsNaN(rect.Y) ||
+                double.IsInfinity(rect.X) || double.IsInfinity(rect.Y))
+            {
+                return false;
+            }
+
+            point = new Point((int)Math.Round(rect.X), (int)Math.Round(rect.Y));
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 }
