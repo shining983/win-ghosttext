@@ -1,4 +1,5 @@
 using System.Text;
+using System.Windows.Automation;
 using WinGhostText.App.Native;
 
 namespace WinGhostText.App.Input;
@@ -18,12 +19,6 @@ internal static class ControlClassifier
         "mintty",
         "Xming",
         "Windows.UI.Input.InputSite.WindowClass" // often used by modern hosts; filtered further below
-    ];
-
-    private static readonly string[] PasswordClassFragments =
-    [
-        "PasswordBox",
-        "Edit" // Edit alone is not enough; checked with style/uia separately
     ];
 
     public static bool ShouldSkip(IntPtr hwnd)
@@ -60,6 +55,11 @@ internal static class ControlClassifier
             return true;
         }
 
+        if (IsUiaPassword(hwnd))
+        {
+            return true;
+        }
+
         // Heuristic: window title hints for terminals
         var root = NativeMethods.GetAncestor(hwnd, NativeMethods.GA_ROOT);
         if (root != IntPtr.Zero)
@@ -77,6 +77,25 @@ internal static class ControlClassifier
         }
 
         return false;
+    }
+
+    private static bool IsUiaPassword(IntPtr hwnd)
+    {
+        try
+        {
+            var element = AutomationElement.FromHandle(hwnd);
+            if (element is null)
+            {
+                return false;
+            }
+
+            var value = element.GetCurrentPropertyValue(AutomationElement.IsPasswordProperty);
+            return value is true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static bool IsTerminalClass(string className)
