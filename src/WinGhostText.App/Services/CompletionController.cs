@@ -98,18 +98,14 @@ internal sealed class CompletionController : IDisposable
                 if (_current is not null)
                 {
                     e.Handled = true;
-                    Accept(appendSpace: false);
+                    Accept();
                 }
 
                 return;
 
             case VirtualKeys.Space:
-                if (_current is not null)
-                {
-                    e.Handled = true;
-                    Accept(appendSpace: true);
-                }
-
+                // Space never accepts GhostText — insert a normal space and end the suggestion.
+                Dismiss();
                 return;
 
             case VirtualKeys.Left:
@@ -139,7 +135,7 @@ internal sealed class CompletionController : IDisposable
         }
     }
 
-    private void Accept(bool appendSpace)
+    private void Accept()
     {
         CompletionSuggestion? suggestion;
         lock (_gate)
@@ -157,7 +153,7 @@ internal sealed class CompletionController : IDisposable
         try
         {
             _suppressHook = true;
-            TextInjector.Accept(suggestion, appendSpace);
+            TextInjector.Accept(suggestion);
         }
         finally
         {

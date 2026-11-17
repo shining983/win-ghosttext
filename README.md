@@ -2,7 +2,7 @@
 
 ## 中文说明（怎么用）
 
-**这是什么：** 一款 Windows 本地英文单词「灰色后缀」补全工具——在光标旁显示建议，按 **Tab** 或 **空格** 接受，按 **Esc** 取消。完全离线，不联网，不用 AI。
+**这是什么：** 一款 Windows 本地英文单词「灰色后缀」补全工具——在光标旁显示建议，按 **Tab** 接受，按 **空格** 正常输入空格并结束当前建议，按 **Esc** 取消。完全离线，不联网，不用 AI。
 
 ### 运行环境
 
@@ -30,9 +30,10 @@
 1. 运行 `WinGhostText.exe` → 系统托盘出现图标（默认已开启）。
 2. 打开 **记事本（Notepad）**，输入英文，例如 `environ`。
 3. 光标旁会出现灰色后缀（如 `ment`）——这就是 GhostText。
-4. **Tab** 或 **空格**：接受补全（空格会在补全后再加一个空格）。
-5. **Esc**：取消本次建议。
-6. 托盘图标 → 勾选/取消 **Enabled**：随时开启或暂停；需要退出时选 Exit。
+4. **Tab**：接受补全。
+5. **空格**：始终插入普通空格，并结束/隐藏当前单词建议（**不会**采纳补全）。
+6. **Esc**：取消本次建议（不插入空格）。
+7. 托盘图标 → 勾选/取消 **Enabled**：随时开启或暂停；需要退出时选 Exit。
 
 提示：至少输入 **3** 个字母才会出现建议，减少打扰。
 
@@ -55,7 +56,7 @@
 
 ## English
 
-**What it is:** Local, offline English **GhostText** for Windows — a gray suffix near the caret; **Tab** or **Space** to accept, **Esc** to dismiss. No cloud, no AI.
+**What it is:** Local, offline English **GhostText** for Windows — a gray suffix near the caret; **Tab** accepts, **Space** inserts a normal space and ends the current suggestion, **Esc** dismisses. No cloud, no AI.
 
 ### Requirements
 
@@ -85,7 +86,7 @@ dotnet run --project .\src\WinGhostText.App\WinGhostText.App.csproj -c Release
 
 1. Start `WinGhostText.exe` → tray icon (enabled by default).
 2. Open **Notepad**, type e.g. `environ` → gray `ment`.
-3. **Tab** / **Space** accept (Space also inserts a trailing space); **Esc** dismisses.
+3. **Tab** accepts; **Space** always inserts a normal space and dismisses the current word suggestion (does **not** accept); **Esc** dismisses without inserting a space.
 4. Tray → **Enabled** on/off; **Exit** to quit.
 
 Minimum prefix length: **3**.
@@ -111,7 +112,7 @@ While IME **composition** is active, GhostText is fully suppressed so Chinese ty
 | Key | With suggestion | Without suggestion |
 |---|---|---|
 | Tab | Accept suffix / spelling fix | Normal Tab |
-| Space | Accept + insert space | Normal Space |
+| Space | Insert normal space + dismiss suggestion | Normal Space |
 | Esc | Dismiss overlay | Normal Esc |
 
 ### Word list & license

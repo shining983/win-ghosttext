@@ -6,7 +6,7 @@ namespace WinGhostText.App.Input;
 
 internal static class TextInjector
 {
-    public static void Accept(CompletionSuggestion suggestion, bool appendSpace)
+    public static void Accept(CompletionSuggestion suggestion)
     {
         if (suggestion.ReplaceTypedPrefix)
         {
@@ -17,11 +17,6 @@ internal static class TextInjector
         else
         {
             TypeText(suggestion.InsertionText);
-        }
-
-        if (appendSpace)
-        {
-            TypeText(" ");
         }
     }
 

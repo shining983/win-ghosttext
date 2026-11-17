@@ -18,7 +18,7 @@ Architecture uses a low-level keyboard hook + Win32/UIA prefix reads, so many ap
 3. Tab accepts → `environment`.
 4. Type `develop` → gray suffix for `development` (or best-ranked completion).
 5. Type `becuase` → spelling GhostText for `because`; Tab replaces.
-6. With suggestion visible, Space accepts + space; without suggestion, Space is normal.
+6. With suggestion visible, Space inserts a normal space and dismisses (does **not** accept); without suggestion, Space is normal.
 7. Esc dismisses; arrows dismiss.
 8. Switch to Chinese IME, compose characters → no GhostText.
 9. Tray → uncheck Enabled → no suggestions; re-enable → works again.
