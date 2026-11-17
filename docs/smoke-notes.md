@@ -26,7 +26,7 @@ Architecture uses a low-level keyboard hook + Win32/UIA prefix reads, so many ap
 
 ## Known gaps
 
-- Overlay font matching is best-effort (UIA font attributes are not universal).
+- Overlay font matching: UIA Document/"Text editor" attrs → `WM_GETFONT` → glyph/caret cell calibration + baseline align; still best-effort when hosts hide metrics.
 - Electron / Chromium caret coordinates are frequently wrong.
 - Spelling correction is intentionally conservative (common table first).
 - No auto-start (deferred past V1).

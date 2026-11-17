@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
@@ -25,8 +26,13 @@ internal sealed class GhostTextOverlay
         {
             Foreground = new SolidColorBrush(MediaColor.FromArgb(0x99, 0x80, 0x80, 0x80)),
             Background = MediaBrushes.Transparent,
-            FontSize = 12,
+            // 11pt in DIPs — replaced by live probe whenever available.
+            FontSize = 11.0 * 96.0 / 72.0,
+            FontFamily = new MediaFontFamily("Segoe UI"),
             TextWrapping = TextWrapping.NoWrap,
+            Padding = new Thickness(0),
+            Margin = new Thickness(0),
+            LineStackingStrategy = LineStackingStrategy.BlockLineHeight,
             IsHitTestVisible = false
         };
 
@@ -45,8 +51,9 @@ internal sealed class GhostTextOverlay
             Content = new Border
             {
                 Background = MediaBrushes.Transparent,
-                Child = _text,
-                Padding = new Thickness(0)
+                BorderThickness = new Thickness(0),
+                Padding = new Thickness(0),
+                Child = _text
             }
         };
 
@@ -72,50 +79,87 @@ internal sealed class GhostTextOverlay
         }
     }
 
-    public void Show(CompletionSuggestion suggestion, System.Drawing.Point caretScreen, string? fontFamily, float? fontSizePt)
+    public void Show(
+        CompletionSuggestion suggestion,
+        System.Drawing.Point caretScreen,
+        string? fontFamily,
+        float? fontSizeDip,
+        int? fontWeight = null,
+        int targetCellHeightPx = 0)
     {
         void Apply()
         {
             _text.Text = suggestion.GhostDisplay;
             if (!string.IsNullOrWhiteSpace(fontFamily))
             {
-                _text.FontFamily = new MediaFontFamily(fontFamily);
+                // Prefer the probed face; allow WPF fallbacks if the face is missing locally.
+                _text.FontFamily = new MediaFontFamily(
+                    fontFamily + ", Segoe UI Variable, Cascadia Mono, Consolas, Segoe UI");
             }
             else
             {
-                _text.FontFamily = new MediaFontFamily("Segoe UI");
+                _text.FontFamily = new MediaFontFamily(
+                    "Segoe UI Variable, Cascadia Mono, Consolas, Segoe UI");
             }
 
-            if (fontSizePt is > 0)
+            if (fontSizeDip is > 0)
             {
-                _text.FontSize = fontSizePt.Value;
+                // Probe already converted points / GDI pixels into WPF DIPs.
+                _text.FontSize = fontSizeDip.Value;
             }
 
-            // Offset slightly to the right of the caret so we don't cover the typed prefix.
-            // Caret coordinates are in physical pixels; convert for WPF when needed.
-            var source = _window.IsVisible
-                ? PresentationSource.FromVisual(_window)
-                : null;
-
-            double dipX = caretScreen.X;
-            double dipY = caretScreen.Y;
-            if (source?.CompositionTarget is not null)
+            if (fontWeight is > 0 and <= 1000)
             {
-                var transform = source.CompositionTarget.TransformFromDevice;
-                var dip = transform.Transform(new System.Windows.Point(caretScreen.X, caretScreen.Y));
-                dipX = dip.X;
-                dipY = dip.Y;
+                _text.FontWeight = FontWeight.FromOpenTypeWeight(fontWeight.Value);
             }
             else
             {
-                // Approximate using system DPI before the window is shown.
-                using var g = System.Drawing.Graphics.FromHwnd(IntPtr.Zero);
-                dipX = caretScreen.X * 96.0 / g.DpiX;
-                dipY = caretScreen.Y * 96.0 / g.DpiY;
+                _text.FontWeight = FontWeights.Normal;
+            }
+
+            // Create HWND first (no Show yet) so per-monitor DPI / FormattedText are correct.
+            ApplyClickThrough();
+
+            var dpi = VisualTreeHelper.GetDpi(_window);
+            var pixelsPerDip = dpi.PixelsPerDip > 0 ? dpi.PixelsPerDip : 1.0;
+            var scaleX = dpi.DpiScaleX > 0 ? dpi.DpiScaleX : 1.0;
+            var scaleY = dpi.DpiScaleY > 0 ? dpi.DpiScaleY : 1.0;
+
+            // Physical caret → DIP using the overlay's monitor scale (PerMonitorV2).
+            var dipX = caretScreen.X / scaleX;
+            var dipY = caretScreen.Y / scaleY;
+            var cellHeightDip = targetCellHeightPx > 0
+                ? targetCellHeightPx / scaleY
+                : 0;
+
+            // Calibrate em size so the laid-out line box matches the host caret/glyph cell.
+            // Caret/line height is not FontSize; without this, GhostText stays visually small.
+            if (cellHeightDip > 0 && !string.IsNullOrEmpty(_text.Text))
+            {
+                CalibrateToCellHeight(cellHeightDip, pixelsPerDip);
+            }
+
+            _text.LineHeight = _text.FontSize;
+
+            var metrics = MeasureText(pixelsPerDip);
+            double top;
+            if (cellHeightDip > 0 && metrics.Height > 0 && metrics.Baseline > 0)
+            {
+                // Match overlay baseline to host cell baseline (proportional within the caret box).
+                var hostBaseline = dipY + cellHeightDip * (metrics.Baseline / metrics.Height);
+                top = hostBaseline - metrics.Baseline;
+            }
+            else if (cellHeightDip > 0 && metrics.Height > 0)
+            {
+                top = dipY + (cellHeightDip - metrics.Height) / 2.0;
+            }
+            else
+            {
+                top = dipY - 1;
             }
 
             _window.Left = dipX + 1;
-            _window.Top = dipY - 1;
+            _window.Top = top;
 
             if (!_window.IsVisible)
             {
@@ -133,6 +177,42 @@ internal sealed class GhostTextOverlay
         {
             _window.Dispatcher.Invoke(Apply);
         }
+    }
+
+    private void CalibrateToCellHeight(double cellHeightDip, double pixelsPerDip)
+    {
+        // Iterate a couple of times — typeface metrics are mildly non-linear with size.
+        for (var i = 0; i < 3; i++)
+        {
+            var measured = MeasureText(pixelsPerDip);
+            if (measured.Height <= 0.1)
+            {
+                return;
+            }
+
+            var scale = cellHeightDip / measured.Height;
+            if (Math.Abs(scale - 1.0) < 0.02)
+            {
+                return;
+            }
+
+            // Keep FontSize in a sane range (6–96 DIP).
+            var next = _text.FontSize * scale;
+            _text.FontSize = Math.Clamp(next, 6.0, 96.0);
+            _text.LineHeight = _text.FontSize;
+        }
+    }
+
+    private FormattedText MeasureText(double pixelsPerDip)
+    {
+        return new FormattedText(
+            _text.Text ?? string.Empty,
+            CultureInfo.CurrentUICulture,
+            System.Windows.FlowDirection.LeftToRight,
+            new Typeface(_text.FontFamily, _text.FontStyle, _text.FontWeight, _text.FontStretch),
+            _text.FontSize,
+            _text.Foreground,
+            pixelsPerDip);
     }
 
     private void ApplyClickThrough()
