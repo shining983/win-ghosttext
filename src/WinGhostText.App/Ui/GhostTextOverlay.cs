@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
 using System.Windows.Media;
+using Microsoft.Win32;
 using WinGhostText.App.Native;
 using WinGhostText.Core;
 using MediaBrushes = System.Windows.Media.Brushes;
@@ -16,6 +17,11 @@ namespace WinGhostText.App.Ui;
 /// </summary>
 internal sealed class GhostTextOverlay
 {
+    // Previous brush was ARGB(0x99, 0x80, 0x80, 0x80) — ~#B3 on white / ~#59 on dark, too faint.
+    // Theme-aware mid-grays stay readable as "ghost" (not typed black/white) on both Notepad themes.
+    private static readonly SolidColorBrush LightThemeGhostBrush = CreateFrozenBrush(0xD0, 0x5A, 0x5A, 0x5A);
+    private static readonly SolidColorBrush DarkThemeGhostBrush = CreateFrozenBrush(0xD0, 0xA8, 0xA8, 0xA8);
+
     private readonly Window _window;
     private readonly TextBlock _text;
     private bool _hooked;
@@ -24,7 +30,7 @@ internal sealed class GhostTextOverlay
     {
         _text = new TextBlock
         {
-            Foreground = new SolidColorBrush(MediaColor.FromArgb(0x99, 0x80, 0x80, 0x80)),
+            Foreground = LightThemeGhostBrush,
             Background = MediaBrushes.Transparent,
             // 11pt in DIPs — replaced by live probe whenever available.
             FontSize = 11.0 * 96.0 / 72.0,
@@ -90,6 +96,7 @@ internal sealed class GhostTextOverlay
         void Apply()
         {
             _text.Text = suggestion.GhostDisplay;
+            _text.Foreground = ResolveGhostBrush(caretScreen);
             if (!string.IsNullOrWhiteSpace(fontFamily))
             {
                 // Prefer the probed face; allow WPF fallbacks if the face is missing locally.
@@ -213,6 +220,94 @@ internal sealed class GhostTextOverlay
             _text.FontSize,
             _text.Foreground,
             pixelsPerDip);
+    }
+
+    private static SolidColorBrush CreateFrozenBrush(byte a, byte r, byte g, byte b)
+    {
+        var brush = new SolidColorBrush(MediaColor.FromArgb(a, r, g, b));
+        brush.Freeze();
+        return brush;
+    }
+
+    /// <summary>
+    /// Pick a darker (light theme) or lighter (dark theme) mid-gray so the suffix stays visible
+    /// without matching typed text. Prefers sampling the editor background near the caret.
+    /// </summary>
+    private static SolidColorBrush ResolveGhostBrush(System.Drawing.Point caretScreen)
+    {
+        if (TrySampleEditorIsLight(caretScreen, out var isLight))
+        {
+            return isLight ? LightThemeGhostBrush : DarkThemeGhostBrush;
+        }
+
+        return AppsUseLightTheme() ? LightThemeGhostBrush : DarkThemeGhostBrush;
+    }
+
+    private static bool TrySampleEditorIsLight(System.Drawing.Point caretScreen, out bool isLight)
+    {
+        isLight = true;
+        var hdc = NativeMethods.GetDC(IntPtr.Zero);
+        if (hdc == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        try
+        {
+            // Prefer a point just above the caret (usually empty editor chrome), then slightly
+            // to the right (ahead of typed text) so we sample background, not glyphs.
+            var samples = new (int X, int Y)[]
+            {
+                (caretScreen.X, Math.Max(0, caretScreen.Y - 3)),
+                (caretScreen.X + 24, caretScreen.Y),
+                (caretScreen.X + 8, Math.Max(0, caretScreen.Y - 2))
+            };
+
+            long lumaSum = 0;
+            var count = 0;
+            foreach (var (x, y) in samples)
+            {
+                var pixel = NativeMethods.GetPixel(hdc, x, y);
+                if (pixel == 0xFFFFFFFF) // GetPixel failure sentinel
+                {
+                    continue;
+                }
+
+                var r = (int)(pixel & 0xFF);
+                var g = (int)((pixel >> 8) & 0xFF);
+                var b = (int)((pixel >> 16) & 0xFF);
+                lumaSum += (r * 299 + g * 587 + b * 114) / 1000;
+                count++;
+            }
+
+            if (count == 0)
+            {
+                return false;
+            }
+
+            isLight = (lumaSum / count) >= 128;
+            return true;
+        }
+        finally
+        {
+            _ = NativeMethods.ReleaseDC(IntPtr.Zero, hdc);
+        }
+    }
+
+    private static bool AppsUseLightTheme()
+    {
+        try
+        {
+            var value = Registry.GetValue(
+                @"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+                "AppsUseLightTheme",
+                1);
+            return value is int i ? i != 0 : true;
+        }
+        catch
+        {
+            return true;
+        }
     }
 
     private void ApplyClickThrough()
