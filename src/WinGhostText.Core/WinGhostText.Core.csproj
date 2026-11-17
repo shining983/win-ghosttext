@@ -1,0 +1,13 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>WinGhostText.Core</RootNamespace>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Data\english-freq.txt" LogicalName="WinGhostText.Core.Data.english-freq.txt" />
+    <EmbeddedResource Include="Data\common-misspellings.txt" LogicalName="WinGhostText.Core.Data.common-misspellings.txt" />
+  </ItemGroup>
+</Project>
