@@ -13,9 +13,12 @@ internal static class NativeMethods
 
     public const int WM_GETTEXT = 0x000D;
     public const int WM_GETTEXTLENGTH = 0x000E;
+    public const int WM_GETFONT = 0x0031;
     public const int EM_GETSEL = 0x00B0;
     public const int EM_REPLACESEL = 0x00C2;
     public const int EM_GETRECT = 0x00B2;
+    public const int LOGPIXELSY = 90;
+    public const int DEFAULT_DPI = 96;
 
     public const uint GA_ROOT = 2;
     public const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
@@ -123,6 +126,26 @@ internal static class NativeMethods
         public ushort wParamH;
     }
 
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct LOGFONT
+    {
+        public int lfHeight;
+        public int lfWidth;
+        public int lfEscapement;
+        public int lfOrientation;
+        public int lfWeight;
+        public byte lfItalic;
+        public byte lfUnderline;
+        public byte lfStrikeOut;
+        public byte lfCharSet;
+        public byte lfOutPrecision;
+        public byte lfClipPrecision;
+        public byte lfQuality;
+        public byte lfPitchAndFamily;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+        public string lfFaceName;
+    }
+
     [DllImport("user32.dll", SetLastError = true)]
     public static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc lpfn, IntPtr hMod, uint dwThreadId);
 
@@ -199,10 +222,66 @@ internal static class NativeMethods
     [DllImport("imm32.dll")]
     public static extern bool ImmGetOpenStatus(IntPtr hIMC);
 
+    [DllImport("gdi32.dll", CharSet = CharSet.Unicode)]
+    public static extern int GetObject(IntPtr hgdiobj, int cbBuffer, ref LOGFONT lpvObject);
+
+    [DllImport("user32.dll")]
+    public static extern uint GetDpiForWindow(IntPtr hwnd);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetDC(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    public static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);
+
+    [DllImport("gdi32.dll")]
+    public static extern int GetDeviceCaps(IntPtr hdc, int nIndex);
+
     public static string GetWindowClass(IntPtr hwnd)
     {
         var sb = new StringBuilder(256);
         _ = GetClassName(hwnd, sb, sb.Capacity);
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// DPI for <paramref name="hwnd"/>'s monitor; falls back to system DPI, then 96.
+    /// </summary>
+    public static uint GetWindowDpi(IntPtr hwnd)
+    {
+        try
+        {
+            if (hwnd != IntPtr.Zero)
+            {
+                var dpi = GetDpiForWindow(hwnd);
+                if (dpi != 0)
+                {
+                    return dpi;
+                }
+            }
+        }
+        catch (EntryPointNotFoundException)
+        {
+            // Pre-Win10: fall through.
+        }
+
+        var hdc = GetDC(hwnd);
+        if (hdc != IntPtr.Zero)
+        {
+            try
+            {
+                var dpi = GetDeviceCaps(hdc, LOGPIXELSY);
+                if (dpi > 0)
+                {
+                    return (uint)dpi;
+                }
+            }
+            finally
+            {
+                _ = ReleaseDC(hwnd, hdc);
+            }
+        }
+
+        return DEFAULT_DPI;
     }
 }

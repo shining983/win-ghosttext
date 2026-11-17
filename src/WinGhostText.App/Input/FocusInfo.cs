@@ -11,7 +11,8 @@ internal sealed record FocusInfo(
     string Prefix,
     bool HasSelection,
     string? FontFamily,
-    float? FontSizePt)
+    float? FontSizeDip,
+    int? FontWeight)
 {
     public static FocusInfo? TryCapture()
     {
@@ -39,8 +40,9 @@ internal sealed record FocusInfo(
         var root = NativeMethods.GetAncestor(hwnd, NativeMethods.GA_ROOT);
 
         var caret = ResolveCaretScreen(hwnd, gui);
+        var caretHeightPx = Math.Max(0, gui.rcCaret.Bottom - gui.rcCaret.Top);
         var (prefix, hasSelection) = PrefixExtractor.TryReadPrefix(hwnd, className);
-        var (fontFamily, fontSize) = FontProbe.TryRead(hwnd, className);
+        var font = FontProbe.TryRead(hwnd, className, caretHeightPx);
 
         return new FocusInfo(
             hwnd,
@@ -49,8 +51,9 @@ internal sealed record FocusInfo(
             caret,
             prefix,
             hasSelection,
-            fontFamily,
-            fontSize);
+            font.Family,
+            font.SizeDip,
+            font.Weight);
     }
 
     private static Point ResolveCaretScreen(IntPtr hwnd, NativeMethods.GUITHREADINFO gui)

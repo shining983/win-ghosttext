@@ -25,7 +25,9 @@ internal sealed class GhostTextOverlay
         {
             Foreground = new SolidColorBrush(MediaColor.FromArgb(0x99, 0x80, 0x80, 0x80)),
             Background = MediaBrushes.Transparent,
-            FontSize = 12,
+            // 11pt in DIPs — replaced by live probe whenever available.
+            FontSize = 11.0 * 96.0 / 72.0,
+            FontFamily = new MediaFontFamily("Segoe UI"),
             TextWrapping = TextWrapping.NoWrap,
             IsHitTestVisible = false
         };
@@ -72,23 +74,39 @@ internal sealed class GhostTextOverlay
         }
     }
 
-    public void Show(CompletionSuggestion suggestion, System.Drawing.Point caretScreen, string? fontFamily, float? fontSizePt)
+    public void Show(
+        CompletionSuggestion suggestion,
+        System.Drawing.Point caretScreen,
+        string? fontFamily,
+        float? fontSizeDip,
+        int? fontWeight = null)
     {
         void Apply()
         {
             _text.Text = suggestion.GhostDisplay;
             if (!string.IsNullOrWhiteSpace(fontFamily))
             {
-                _text.FontFamily = new MediaFontFamily(fontFamily);
+                // Prefer the probed face; allow WPF fallbacks if the face is missing locally.
+                _text.FontFamily = new MediaFontFamily(fontFamily + ", Cascadia Mono, Consolas, Segoe UI");
             }
             else
             {
-                _text.FontFamily = new MediaFontFamily("Segoe UI");
+                _text.FontFamily = new MediaFontFamily("Cascadia Mono, Consolas, Segoe UI");
             }
 
-            if (fontSizePt is > 0)
+            if (fontSizeDip is > 0)
             {
-                _text.FontSize = fontSizePt.Value;
+                // Probe already converted points / GDI pixels into WPF DIPs.
+                _text.FontSize = fontSizeDip.Value;
+            }
+
+            if (fontWeight is > 0 and <= 1000)
+            {
+                _text.FontWeight = FontWeight.FromOpenTypeWeight(fontWeight.Value);
+            }
+            else
+            {
+                _text.FontWeight = FontWeights.Normal;
             }
 
             // Offset slightly to the right of the caret so we don't cover the typed prefix.
