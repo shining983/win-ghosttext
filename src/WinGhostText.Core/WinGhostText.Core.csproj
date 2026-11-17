@@ -5,6 +5,9 @@
     <Nullable>enable</Nullable>
     <RootNamespace>WinGhostText.Core</RootNamespace>
     <LangVersion>latest</LangVersion>
+    <Authors>shining983</Authors>
+    <PackageLicenseExpression>PolyForm-Noncommercial-1.0.0</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/shining983/win-ghosttext</PackageProjectUrl>
   </PropertyGroup>
   <ItemGroup>
     <EmbeddedResource Include="Data\english-freq.txt" LogicalName="WinGhostText.Core.Data.english-freq.txt" />
