@@ -19,7 +19,7 @@ V1 **验收目标就是记事本**（经典 `Edit` / Win11 `RichEditD2DPT`）。
 | App | Prefix 前缀 | Caret 气泡位置 | Accept 注入 | 预期 |
 |---|---|---|---|---|
 | **Notepad** Win10 经典 `Edit` | ✅ `WM_GETTEXT` + `EM_GETSEL` | ✅ `GetGUIThreadInfo` | ✅ Unicode `SendInput` | **验收目标 / 应稳定** |
-| **Notepad** Win11 `RichEditD2DPT` | ✅ Win32 `EM_EXGETSEL` 或 UIA | ✅ GUI caret 或 UIA rect | ✅ | **应可用**（本轮 RichEdit 选区修复） |
+| **Notepad** Win11 `RichEditD2DPT` / InputSite | ✅ Document UIA（不依赖 DocumentRange） | ✅ GUI caret 优先，否则 Document UIA / `EM_GETRECT` | ✅ | **应可用**（勿把 InputSite 当终端跳过） |
 | **Word** | 🟡 常可用（UIA TextPattern） | 🟡 缩放/DPI 可能偏移 | 🟡 一般可插入 | **实验性**：补全常有，对齐可能偏 |
 | **Edge/Chrome 地址栏** | 🟡 ValuePattern 偶发可用 | 🟡 | 🟡 | **半支持**：短输入框更可能 |
 | **Edge/Chrome 网页编辑区** | 🔴 沙箱/无障碍树常读不到词 | 🔴 caret 常错 | 🔴 可能打到错误焦点 | **V1 不支持** |
@@ -35,11 +35,13 @@ V1 **验收目标就是记事本**（经典 `Edit` / Win11 `RichEditD2DPT`）。
 
 - **UIA 前缀**：用 document→caret 的文本 + `WordPrefix`，避免 `ExpandToEnclosingUnit` 把 caret **后面** 的字母算进前缀。
 - **元素解析**：`FromHandle` → `FocusedElement` → 浅层 `TextPattern` 子树（Electron/复合窗体）。
-- **Caret**：GUI caret → `GetCaretPos` → **UIA `GetBoundingRectangles`** → `EM_GETRECT`。
+- **Caret**：Win11 Notepad 优先 GUI caret；否则 Document/`Text editor` UIA rect → `GetCaretPos` → `EM_GETRECT`（不要求 DocumentRange）。
 - **RichEdit**：`EM_EXGETSEL`（32-bit），避免长文档 caret 被 `EM_GETSEL` 截断。
 - **密码框**：额外读 UIA `IsPassword`。
+- **Skip 列表**：`Windows.UI.Input.InputSite.WindowClass` **不再**当终端跳过（Win11 记事本 hwndFocus）；Notepad 根窗口白名单。
+- **IME**：仅组合态或（CJK 布局 + IME 打开 + `IME_CMODE_NATIVE`）抑制；纯 ENG / 非 native 转换即使装了中文布局也放行。
 - **SendInput x64**：`INPUT` union 补齐到 40 字节（否则 Tab 采纳在 win-x64 上 Error 87）。
-- **建议气泡**：caret 下方优先锚定（空间不足则上方）；显示整词；浅/深色面板；点击穿透、不抢焦点。不再做 FormattedText 基线叠字。
+- **建议气泡**：caret 下方优先锚定（空间不足则上方）；显示整词；浅/深色面板；点击穿透、不抢焦点。FontProbe 弱时用默认字号仍 `Show`。
 - **Space**：有建议时 Space 插入普通空格并取消建议（**不采纳**）；仅 Tab 采纳。
 
 ---

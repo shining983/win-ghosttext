@@ -218,8 +218,18 @@ internal sealed class CompletionController : IDisposable
                 return;
             }
 
-            if (ImeGate.ShouldSuppressCompletions(focus.Hwnd) ||
-                ImeGate.ShouldSuppressCompletions(focus.RootHwnd))
+            // Prefer focus-thread IME state. Root IMC on Win11 Notepad can look "native"
+            // while tray ENG / non-native conversion on the focus hwnd allows English.
+            if (ImeGate.ShouldSuppressCompletions(focus.Hwnd))
+            {
+                Dismiss();
+                return;
+            }
+
+            // Root: only suppress on active composition (not layout/native alone).
+            if (focus.RootHwnd != IntPtr.Zero &&
+                focus.RootHwnd != focus.Hwnd &&
+                ImeGate.IsCompositionActive(focus.RootHwnd))
             {
                 Dismiss();
                 return;
@@ -250,16 +260,17 @@ internal sealed class CompletionController : IDisposable
                 _current = suggestion;
             }
 
-            // Bubble anchors to caret top/height — no baseline overlay calibration.
+            // Always show when prefix+suggestion exist. Weak FontProbe → overlay defaults.
             var caretHeightPx = focus.CaretHeightPx > 0
                 ? focus.CaretHeightPx
                 : focus.TargetCellHeightPx;
+            var fontSizeDip = focus.FontSizeDip is > 0 ? focus.FontSizeDip : null;
             _overlay.Show(
                 suggestion,
                 focus.CaretScreen,
                 caretHeightPx,
                 focus.Dpi,
-                focus.FontSizeDip);
+                fontSizeDip);
         }
         catch
         {
@@ -277,9 +288,15 @@ internal sealed class CompletionController : IDisposable
                 return false;
             }
 
+            if (ImeGate.ShouldSuppressCompletions(hwnd))
+            {
+                return true;
+            }
+
             var root = Native.NativeMethods.GetAncestor(hwnd, Native.NativeMethods.GA_ROOT);
-            return ImeGate.ShouldSuppressCompletions(hwnd) ||
-                   (root != IntPtr.Zero && ImeGate.ShouldSuppressCompletions(root));
+            return root != IntPtr.Zero &&
+                   root != hwnd &&
+                   ImeGate.IsCompositionActive(root);
         }
         catch
         {

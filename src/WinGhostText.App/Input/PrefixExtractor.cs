@@ -128,9 +128,17 @@ internal static class PrefixExtractor
         var selection = textPattern.GetSelection();
         if (selection.Length == 0)
         {
-            // No selection ranges — try document end as last resort.
-            var docText = SafeGetText(textPattern.DocumentRange, MaxDocumentProbeChars);
-            return (WordPrefix.Extract(docText, docText.Length), false);
+            // No selection ranges — try document end as last resort (optional).
+            // Win11 Notepad may throw on DocumentRange; caret-based paths below still work.
+            try
+            {
+                var docText = SafeGetText(textPattern.DocumentRange, MaxDocumentProbeChars);
+                return (WordPrefix.Extract(docText, docText.Length), false);
+            }
+            catch
+            {
+                return (string.Empty, false);
+            }
         }
 
         var caretRange = selection[0];
@@ -143,6 +151,7 @@ internal static class PrefixExtractor
 
         // Preferred: text from document start → caret, then WordPrefix at end.
         // Caps document probe so large Word/browser docs stay cheap.
+        // DocumentRange is optional — Win11 Notepad RichEdit sometimes rejects it.
         try
         {
             var beforeCaret = caretRange.Clone();
@@ -166,7 +175,7 @@ internal static class PrefixExtractor
         }
         catch
         {
-            // Fall through to word-unit strategy.
+            // Fall through to word-unit strategy — do not require DocumentRange.
         }
 
         // Fallback: expand to enclosing word, then take only the span from
@@ -196,8 +205,9 @@ internal static class PrefixExtractor
     }
 
     /// <summary>
-    /// Prefer the hwnd element; else focused UIA node; else shallow TextPattern search.
-    /// Helps Chromium/Electron and composite Win11 hosts where hwnd ≠ text peer.
+    /// Prefer the hwnd element; else focused UIA node; else Document/"Text editor"
+    /// under the root (Win11 Notepad InputSite); else shallow TextPattern search.
+    /// Do not require DocumentRange success up-front — caret/prefix may still work.
     /// </summary>
     private static AutomationElement? ResolveTextElement(IntPtr hwnd)
     {
@@ -232,6 +242,19 @@ internal static class PrefixExtractor
             // Ignore focus lookup failures.
         }
 
+        // Win11 Notepad: hwndFocus is InputSite; text lives on Document / RichEditD2D*.
+        var rootHandle = hwnd != IntPtr.Zero
+            ? NativeMethods.GetAncestor(hwnd, NativeMethods.GA_ROOT)
+            : IntPtr.Zero;
+        if (rootHandle != IntPtr.Zero)
+        {
+            var doc = FindDocumentElement(rootHandle);
+            if (doc is not null)
+            {
+                return doc;
+            }
+        }
+
         if (fromHwnd is not null)
         {
             var nested = FindTextPatternDescendant(fromHwnd);
@@ -244,6 +267,51 @@ internal static class PrefixExtractor
         }
 
         return null;
+    }
+
+    private static AutomationElement? FindDocumentElement(IntPtr rootHwnd)
+    {
+        AutomationElement? root;
+        try
+        {
+            root = AutomationElement.FromHandle(rootHwnd);
+        }
+        catch
+        {
+            return null;
+        }
+
+        if (root is null)
+        {
+            return null;
+        }
+
+        foreach (var condition in DocumentConditions())
+        {
+            try
+            {
+                var doc = root.FindFirst(TreeScope.Descendants, condition);
+                if (doc is not null && SupportsTextOrValue(doc))
+                {
+                    return doc;
+                }
+            }
+            catch
+            {
+                // Skip inaccessible conditions.
+            }
+        }
+
+        return FindTextPatternDescendant(root);
+    }
+
+    private static IEnumerable<Condition> DocumentConditions()
+    {
+        yield return new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Document);
+        yield return new PropertyCondition(AutomationElement.NameProperty, "Text editor");
+        yield return new PropertyCondition(AutomationElement.AutomationIdProperty, "RichEditBox");
+        yield return new PropertyCondition(AutomationElement.ClassNameProperty, "RichEditD2DPT");
+        yield return new PropertyCondition(AutomationElement.ClassNameProperty, "RichEditD2DWindow");
     }
 
     private static bool SupportsTextOrValue(AutomationElement element)
