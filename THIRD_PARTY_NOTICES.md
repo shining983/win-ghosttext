@@ -24,13 +24,13 @@ Derived from **[dwyl/english-words](https://github.com/dwyl/english-words)** `wo
 
 File: `src/WinGhostText.Core/Data/proper-nouns.txt`
 
-Small project-original compilation (MIT).
+Small project-original compilation (PolyForm Noncommercial 1.0.0 with the rest of this repository).
 
 ## Common misspellings table
 
 File: `src/WinGhostText.Core/Data/common-misspellings.txt`
 
-A small hand-maintained list of frequent English typos → corrections (project original, MIT).
+A small hand-maintained list of frequent English typos → corrections (project original; PolyForm Noncommercial 1.0.0).
 
 ## .NET / WPF
 

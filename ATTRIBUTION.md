@@ -17,11 +17,11 @@ WinGhostText ships only **redistributable** English word data — no Collins, Ox
 ## proper-nouns.txt
 
 - Small project-original list of common days/months, places, brands, and given names (canonical Title Case).
-- License: MIT with the rest of this repository.
+- License: same as this repository ([PolyForm Noncommercial 1.0.0](LICENSE)).
 
 ## common-misspellings.txt
 
-- Hand-maintained typo → correction table (project original, MIT).
+- Hand-maintained typo → correction table (project original; same as this repository — PolyForm Noncommercial 1.0.0).
 
 ## Grammar
 
