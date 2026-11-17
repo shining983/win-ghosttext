@@ -40,6 +40,8 @@ internal static class NativeMethods
     public const int GCS_COMPSTR = 0x0008;
     public const int GCS_RESULTSTR = 0x0800;
     public const int IMN_SETCOMPOSITIONWINDOW = 0x000B;
+    /// <summary>IME conversion: native (e.g. Chinese) mode when set; clear in English mode.</summary>
+    public const int IME_CMODE_NATIVE = 0x0001;
 
     public delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
 
@@ -234,6 +236,12 @@ internal static class NativeMethods
 
     [DllImport("imm32.dll")]
     public static extern bool ImmGetOpenStatus(IntPtr hIMC);
+
+    [DllImport("imm32.dll")]
+    public static extern bool ImmGetConversionStatus(IntPtr hIMC, out int lpfdwConversion, out int lpfdwSentence);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetKeyboardLayout(uint idThread);
 
     [DllImport("gdi32.dll", CharSet = CharSet.Unicode)]
     public static extern int GetObject(IntPtr hgdiobj, int cbBuffer, ref LOGFONT lpvObject);

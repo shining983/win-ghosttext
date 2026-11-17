@@ -1,8 +1,8 @@
 namespace WinGhostText.Core;
 
 /// <summary>
-/// Light spelling correction: common-misspelling table first, then
-/// bounded edit-distance search against dictionary words of similar length.
+/// Light spelling correction: common-misspelling table first, adjacent transposition,
+/// then bounded Damerau-Levenshtein search against dictionary words of similar length.
 /// </summary>
 public sealed class SpellingCorrector
 {
@@ -45,7 +45,17 @@ public sealed class SpellingCorrector
             return mapped;
         }
 
-        // Distance-2 only for longer tokens to limit false positives / cost.
+        // Explicit adjacent transposition (Damerau): length ≥ 4, any swap that lands in-dict.
+        if (key.Length >= 4)
+        {
+            var transposed = TryAdjacentTransposition(key);
+            if (transposed is not null)
+            {
+                return transposed;
+            }
+        }
+
+        // Short words: maxDist=1; length ≥ 6 may allow 2. Transposition counts as 1 (Damerau).
         var effectiveMax = key.Length >= 6 ? Math.Min(maxEditDistance, 2) : 1;
         if (effectiveMax < 1)
         {
@@ -67,23 +77,15 @@ public sealed class SpellingCorrector
 
             foreach (var candidate in candidates)
             {
-                // Require shared first character for distance searches.
-                if (candidate[0] != key[0])
+                // Soft first-letter preference: allow mismatch only when lengths match
+                // (covers first-two-letter transposition already handled above, plus rare cases).
+                if (candidate[0] != key[0] &&
+                    (key.Length != candidate.Length || effectiveMax < 2))
                 {
                     continue;
                 }
 
-                // For distance 2, also require a shared second char when both long enough.
-                if (effectiveMax >= 2 &&
-                    key.Length >= 4 &&
-                    candidate.Length >= 4 &&
-                    candidate[1] != key[1] &&
-                    candidate[2] != key[2])
-                {
-                    continue;
-                }
-
-                var dist = Levenshtein(key, candidate, effectiveMax);
+                var dist = DamerauLevenshtein(key, candidate, effectiveMax);
                 if (dist <= 0 || dist > effectiveMax)
                 {
                     continue;
@@ -129,10 +131,47 @@ public sealed class SpellingCorrector
     }
 
     /// <summary>
-    /// Levenshtein distance with early exit when exceeding <paramref name="max"/>.
+    /// Tries every adjacent letter swap; returns the first in-dictionary result
+    /// (preferring the candidate closest to the typed form when multiple match).
+    /// </summary>
+    public string? TryAdjacentTransposition(string key)
+    {
+        if (key.Length < 4)
+        {
+            return null;
+        }
+
+        string? best = null;
+        for (var i = 0; i < key.Length - 1; i++)
+        {
+            if (key[i] == key[i + 1])
+            {
+                continue;
+            }
+
+            var chars = key.ToCharArray();
+            (chars[i], chars[i + 1]) = (chars[i + 1], chars[i]);
+            var candidate = new string(chars);
+            if (!_trie.Contains(candidate))
+            {
+                continue;
+            }
+
+            if (best is null || string.CompareOrdinal(candidate, best) < 0)
+            {
+                best = candidate;
+            }
+        }
+
+        return best;
+    }
+
+    /// <summary>
+    /// Damerau-Levenshtein (optimal string alignment) distance with early exit when
+    /// exceeding <paramref name="max"/>. Adjacent transposition costs 1.
     /// Returns -1 if distance would exceed max.
     /// </summary>
-    public static int Levenshtein(string a, string b, int max)
+    public static int DamerauLevenshtein(string a, string b, int max)
     {
         if (Math.Abs(a.Length - b.Length) > max)
         {
@@ -149,6 +188,8 @@ public sealed class SpellingCorrector
             return a.Length <= max ? a.Length : -1;
         }
 
+        // dp[i,j] with two previous rows for transposition lookback.
+        var prev2 = new int[b.Length + 1];
         var prev = new int[b.Length + 1];
         var curr = new int[b.Length + 1];
         for (var j = 0; j <= b.Length; j++)
@@ -163,12 +204,23 @@ public sealed class SpellingCorrector
             for (var j = 1; j <= b.Length; j++)
             {
                 var cost = a[i - 1] == b[j - 1] ? 0 : 1;
-                curr[j] = Math.Min(
-                    Math.Min(curr[j - 1] + 1, prev[j] + 1),
-                    prev[j - 1] + cost);
-                if (curr[j] < rowMin)
+                var del = prev[j] + 1;
+                var ins = curr[j - 1] + 1;
+                var sub = prev[j - 1] + cost;
+                var value = Math.Min(Math.Min(del, ins), sub);
+
+                // Adjacent transposition.
+                if (i > 1 && j > 1 &&
+                    a[i - 1] == b[j - 2] &&
+                    a[i - 2] == b[j - 1])
                 {
-                    rowMin = curr[j];
+                    value = Math.Min(value, prev2[j - 2] + 1);
+                }
+
+                curr[j] = value;
+                if (value < rowMin)
+                {
+                    rowMin = value;
                 }
             }
 
@@ -177,9 +229,19 @@ public sealed class SpellingCorrector
                 return -1;
             }
 
-            (prev, curr) = (curr, prev);
+            var tmp = prev2;
+            prev2 = prev;
+            prev = curr;
+            curr = tmp;
+            // After rotate, curr is stale prev2 buffer — zero not required (fully overwritten).
         }
 
         return prev[b.Length] <= max ? prev[b.Length] : -1;
     }
+
+    /// <summary>
+    /// Classic Levenshtein (no transposition). Prefer <see cref="DamerauLevenshtein"/> for correction.
+    /// </summary>
+    public static int Levenshtein(string a, string b, int max) =>
+        DamerauLevenshtein(a, b, max);
 }

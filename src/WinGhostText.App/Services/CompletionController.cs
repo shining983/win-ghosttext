@@ -97,6 +97,13 @@ internal sealed class CompletionController : IDisposable
             case VirtualKeys.Tab:
                 if (_current is not null)
                 {
+                    // Never intercept Tab while Chinese/native IME is active.
+                    if (IsImeSuppressing())
+                    {
+                        Dismiss();
+                        return;
+                    }
+
                     e.Handled = true;
                     Accept();
                 }
@@ -211,8 +218,8 @@ internal sealed class CompletionController : IDisposable
                 return;
             }
 
-            if (ImeGate.IsCompositionActive(focus.Hwnd) ||
-                ImeGate.IsCompositionActive(focus.RootHwnd))
+            if (ImeGate.ShouldSuppressCompletions(focus.Hwnd) ||
+                ImeGate.ShouldSuppressCompletions(focus.RootHwnd))
             {
                 Dismiss();
                 return;
@@ -250,11 +257,32 @@ internal sealed class CompletionController : IDisposable
                 focus.FontFamily,
                 focus.FontSizeDip,
                 focus.FontWeight,
-                cellPx);
+                cellPx,
+                focus.Dpi);
         }
         catch
         {
             Dismiss();
+        }
+    }
+
+    private bool IsImeSuppressing()
+    {
+        try
+        {
+            var hwnd = Native.NativeMethods.GetForegroundWindow();
+            if (hwnd == IntPtr.Zero)
+            {
+                return false;
+            }
+
+            var root = Native.NativeMethods.GetAncestor(hwnd, Native.NativeMethods.GA_ROOT);
+            return ImeGate.ShouldSuppressCompletions(hwnd) ||
+                   (root != IntPtr.Zero && ImeGate.ShouldSuppressCompletions(root));
+        }
+        catch
+        {
+            return false;
         }
     }
 
