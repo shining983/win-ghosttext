@@ -250,6 +250,9 @@ internal static class NativeMethods
     [DllImport("gdi32.dll")]
     public static extern int GetDeviceCaps(IntPtr hdc, int nIndex);
 
+    [DllImport("gdi32.dll")]
+    public static extern uint GetPixel(IntPtr hdc, int nXPos, int nYPos);
+
     public static string GetWindowClass(IntPtr hwnd)
     {
         var sb = new StringBuilder(256);
